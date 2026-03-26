@@ -1,0 +1,17 @@
+[
+  {
+    "messages": [
+      {
+        "content": "<image>Detect: dark woven basket on the left side of the white bookshelf, placed on the third shelf from the bottom and containing some items.",
+        "role": "user"
+      },
+      {
+        "content": "BFOV: [-1.9236, 0.4449, 0.2393, 0.1607]",
+        "role": "assistant"
+      }
+    ],
+    "images": [
+      "/workspace/data_dir/USB_data/wcp_data/ReplicaPano/frl_apartment_0_000/Scene_Info/00050/rgb.png"
+    ]
+  }
+]

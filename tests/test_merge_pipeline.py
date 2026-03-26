@@ -1,0 +1,67 @@
+from __future__ import annotations
+
+import json
+import shutil
+import tempfile
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+import sys
+
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from data_merge.builder import BuildConfig, build_dataset
+from data_merge.caption_parser import parse_caption_sections
+
+
+class MergePipelineTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = Path(tempfile.mkdtemp(prefix="data_merge_test_"))
+        self.mock_root = ROOT / "examples" / "mock_input"
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.temp_dir)
+
+    def test_build_dataset_with_mock_inputs(self) -> None:
+        stats = build_dataset(
+            BuildConfig(
+                results_dir=self.mock_root / "results_final_v2",
+                caption_jsonl=self.mock_root / "vqa_generation" / "output_v.jsonl",
+                grounding_json=self.mock_root / "grounding" / "pano_grounding_train_factory.json",
+                output_dir=self.temp_dir,
+            )
+        )
+
+        self.assertEqual(stats["results_final_v2_count"], 2)
+        self.assertEqual(stats["caption_sft_count"], 7)
+        self.assertEqual(stats["grounding_count"], 1)
+        self.assertEqual(stats["merged_total_count"], 10)
+
+        merged_path = self.temp_dir / "merged_sft.jsonl"
+        merged_rows = [json.loads(line) for line in merged_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        self.assertEqual(len(merged_rows), 10)
+
+        caption_rows = [row for row in merged_rows if row["source"] == "caption_vqa"]
+        self.assertTrue(any(row["subtask"] == "full_caption" for row in caption_rows))
+        self.assertTrue(any(row["subtask"] == "global_layout" for row in caption_rows))
+
+        for row in merged_rows:
+            for image in row["images"]:
+                self.assertNotIn("/workspace/data_dir/USB_data2", image)
+                self.assertNotIn("/workspace/data_dir/USB_data", image)
+
+    def test_parse_caption_sections(self) -> None:
+        caption_path = self.mock_root / "vqa_generation" / "output_v.jsonl"
+        record = json.loads(caption_path.read_text(encoding="utf-8").splitlines()[0])
+        sections = parse_caption_sections(record["description"])
+        self.assertIn("GLOBAL LAYOUT", sections)
+        self.assertIn("FINAL RECONSTRUCTION", sections)
+        self.assertIn("kitchen", sections["GLOBAL LAYOUT"].lower())
+
+
+if __name__ == "__main__":
+    unittest.main()

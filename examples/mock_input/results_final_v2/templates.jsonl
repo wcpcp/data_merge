@@ -1,0 +1,1 @@
+{"messages": [{"role": "user", "content": "What is the main room type in this panorama?"}, {"role": "assistant", "content": "It is a kitchen connected to a living area."}], "images": ["/workspace/data_dir/USB_data2/wcp_pano_training/vqa_generation/real_world_data/scene_00001/viewpoints/1753781439/panoImage_1600.jpg"], "task_family": "scene_understanding", "subtask": "room_type"}
