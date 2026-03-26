@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from .config import DEFAULT_CAPTION_JSONL, DEFAULT_GROUNDING_JSON, DEFAULT_RESULTS_DIR
 from .normalizers import normalize_caption_records, normalize_grounding_records, normalize_results_final_v2
+
+DEFAULT_WORKERS = min(32, (os.cpu_count() or 4) + 4)
 
 
 @dataclass
@@ -17,6 +20,7 @@ class BuildConfig:
     output_dir: Path = Path("outputs/sft_merge")
     include_full_caption: bool = True
     drop_missing_images: bool = False
+    workers: int = DEFAULT_WORKERS
     max_results_records: Optional[int] = None
     max_caption_records: Optional[int] = None
     max_grounding_records: Optional[int] = None
@@ -26,15 +30,21 @@ def build_dataset(config: BuildConfig) -> Dict[str, object]:
     output_dir = config.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    results_items = normalize_results_final_v2(config.results_dir, drop_missing_images=config.drop_missing_images)
+    results_items = normalize_results_final_v2(
+        config.results_dir,
+        drop_missing_images=config.drop_missing_images,
+        workers=config.workers,
+    )
     caption_items = normalize_caption_records(
         config.caption_jsonl,
         include_full_caption=config.include_full_caption,
         drop_missing_images=config.drop_missing_images,
+        workers=config.workers,
     )
     grounding_items = normalize_grounding_records(
         config.grounding_json,
         drop_missing_images=config.drop_missing_images,
+        workers=config.workers,
     )
 
     if config.max_results_records is not None:
@@ -61,6 +71,7 @@ def build_dataset(config: BuildConfig) -> Dict[str, object]:
         "training_data_count": len(training_items),
         "include_full_caption": config.include_full_caption,
         "drop_missing_images": config.drop_missing_images,
+        "workers": config.workers,
         "input_paths": {
             "results_dir": str(config.results_dir),
             "caption_jsonl": str(config.caption_jsonl),

@@ -33,6 +33,7 @@ class MergePipelineTest(unittest.TestCase):
                 caption_jsonl=self.mock_root / "vqa_generation" / "output_v.jsonl",
                 grounding_json=self.mock_root / "grounding" / "pano_grounding_train_factory.json",
                 output_dir=self.temp_dir,
+                workers=2,
             )
         )
 
@@ -41,6 +42,7 @@ class MergePipelineTest(unittest.TestCase):
         self.assertEqual(stats["grounding_count"], 1)
         self.assertEqual(stats["merged_total_count"], 10)
         self.assertEqual(stats["training_data_count"], 10)
+        self.assertEqual(stats["workers"], 2)
 
         merged_path = self.temp_dir / "merged_sft.jsonl"
         merged_rows = [json.loads(line) for line in merged_path.read_text(encoding="utf-8").splitlines() if line.strip()]

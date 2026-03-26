@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -25,7 +26,11 @@ def load_jsonl(path: Path) -> List[Dict[str, Any]]:
     return rows
 
 
-def normalize_results_final_v2(results_dir: Path, drop_missing_images: bool = False) -> List[Dict[str, Any]]:
+def normalize_results_final_v2(
+    results_dir: Path,
+    drop_missing_images: bool = False,
+    workers: int = 1,
+) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     if not results_dir.exists():
         raise FileNotFoundError(f"results_final_v2 directory not found: {results_dir}")
@@ -34,23 +39,16 @@ def normalize_results_final_v2(results_dir: Path, drop_missing_images: bool = Fa
     if not canonical_files:
         raise FileNotFoundError(f"no canonical_samples.jsonl found under: {results_dir}")
 
-    for file_path in canonical_files:
-        scene_id, viewpoint_id = infer_scene_and_viewpoint(file_path, results_dir)
-        pano_path = build_realsee_pano_path(scene_id, viewpoint_id)
-        mask_path = build_realsee_mask_path(scene_id, viewpoint_id)
-        records = load_jsonl(file_path)
-        for record_index, record in enumerate(records):
-            normalized = normalize_canonical_sample_record(
-                record=record,
-                pano_path=pano_path,
-                mask_path=mask_path,
-                source_file=file_path,
-                record_index=record_index,
-                drop_missing_images=drop_missing_images,
-            )
-            if normalized is None:
-                continue
-            items.append(normalized)
+    for file_items in parallel_map(
+        canonical_files,
+        lambda file_path: normalize_results_file(
+            file_path=file_path,
+            results_dir=results_dir,
+            drop_missing_images=drop_missing_images,
+        ),
+        workers=workers,
+    ):
+        items.extend(file_items)
     return items
 
 
@@ -58,6 +56,7 @@ def normalize_caption_records(
     caption_jsonl: Path,
     include_full_caption: bool = True,
     drop_missing_images: bool = False,
+    workers: int = 1,
 ) -> List[Dict[str, Any]]:
     if not caption_jsonl.exists():
         raise FileNotFoundError(f"caption jsonl not found: {caption_jsonl}")
@@ -65,65 +64,26 @@ def normalize_caption_records(
     records = load_jsonl(caption_jsonl)
     items: List[Dict[str, Any]] = []
 
-    for record_index, record in enumerate(records):
-        remapped = remap_paths_in_payload(record)
-        pano_path = remapped.get("pano_path")
-        if not pano_path and drop_missing_images:
-            continue
-        description = remapped.get("description", "").strip()
-        scene_key = build_scene_key(remapped, record_index)
-
-        if include_full_caption and description:
-            items.append(
-                {
-                    "id": f"caption_full:{scene_key}",
-                    "source": "caption_vqa",
-                    "task_family": "scene_caption",
-                    "subtask": "full_caption",
-                    "images": [pano_path] if pano_path else [],
-                    "messages": [
-                        {"role": "user", "content": FULL_CAPTION_PROMPT},
-                        {"role": "assistant", "content": description},
-                    ],
-                    "meta": {
-                        "source_record_index": record_index,
-                        "pano_path": pano_path,
-                        "mask_path": remapped.get("mask_path"),
-                        "scene_key": scene_key,
-                        "yaws_deg": remapped.get("yaws_deg"),
-                    },
-                }
-            )
-
-        sections = parse_caption_sections(description)
-        for section_name, prompt in CAPTION_SECTION_PROMPTS.items():
-            answer = sections.get(section_name)
-            if not answer:
-                continue
-            items.append(
-                {
-                    "id": f"caption_{slugify(section_name)}:{scene_key}",
-                    "source": "caption_vqa",
-                    "task_family": "scene_caption",
-                    "subtask": slugify(section_name),
-                    "images": [pano_path] if pano_path else [],
-                    "messages": [
-                        {"role": "user", "content": prompt},
-                        {"role": "assistant", "content": answer},
-                    ],
-                    "meta": {
-                        "source_record_index": record_index,
-                        "section": section_name,
-                        "pano_path": pano_path,
-                        "mask_path": remapped.get("mask_path"),
-                        "scene_key": scene_key,
-                    },
-                }
-            )
+    indexed_records = list(enumerate(records))
+    for record_items in parallel_map(
+        indexed_records,
+        lambda pair: normalize_caption_record(
+            record_index=pair[0],
+            record=pair[1],
+            include_full_caption=include_full_caption,
+            drop_missing_images=drop_missing_images,
+        ),
+        workers=workers,
+    ):
+        items.extend(record_items)
     return items
 
 
-def normalize_grounding_records(grounding_json: Path, drop_missing_images: bool = False) -> List[Dict[str, Any]]:
+def normalize_grounding_records(
+    grounding_json: Path,
+    drop_missing_images: bool = False,
+    workers: int = 1,
+) -> List[Dict[str, Any]]:
     if not grounding_json.exists():
         raise FileNotFoundError(f"grounding json not found: {grounding_json}")
 
@@ -132,21 +92,132 @@ def normalize_grounding_records(grounding_json: Path, drop_missing_images: bool 
         raise ValueError("grounding json must contain a list of records")
 
     items: List[Dict[str, Any]] = []
-    for record_index, record in enumerate(payload):
-        remapped = remap_paths_in_payload(record)
-        normalized = normalize_generic_qa_record(
-            record=remapped,
-            source="replica_grounding",
-            sample_id=f"grounding:{record_index:08d}",
-            meta={"source_record_index": record_index},
+    indexed_records = list(enumerate(payload))
+    for normalized in parallel_map(
+        indexed_records,
+        lambda pair: normalize_grounding_record(
+            record_index=pair[0],
+            record=pair[1],
+            drop_missing_images=drop_missing_images,
+        ),
+        workers=workers,
+    ):
+        if normalized is None:
+            continue
+        items.append(normalized)
+    return items
+
+
+def normalize_results_file(
+    *,
+    file_path: Path,
+    results_dir: Path,
+    drop_missing_images: bool,
+) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    scene_id, viewpoint_id = infer_scene_and_viewpoint(file_path, results_dir)
+    pano_path = build_realsee_pano_path(scene_id, viewpoint_id)
+    mask_path = build_realsee_mask_path(scene_id, viewpoint_id)
+    records = load_jsonl(file_path)
+    for record_index, record in enumerate(records):
+        normalized = normalize_canonical_sample_record(
+            record=record,
+            pano_path=pano_path,
+            mask_path=mask_path,
+            source_file=file_path,
+            record_index=record_index,
             drop_missing_images=drop_missing_images,
         )
         if normalized is None:
             continue
-        normalized["task_family"] = "grounding"
-        normalized["subtask"] = "bfov_grounding"
         items.append(normalized)
     return items
+
+
+def normalize_caption_record(
+    *,
+    record_index: int,
+    record: Dict[str, Any],
+    include_full_caption: bool,
+    drop_missing_images: bool,
+) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    remapped = remap_paths_in_payload(record)
+    pano_path = remapped.get("pano_path")
+    if not pano_path and drop_missing_images:
+        return items
+    description = remapped.get("description", "").strip()
+    scene_key = build_scene_key(remapped, record_index)
+
+    if include_full_caption and description:
+        items.append(
+            {
+                "id": f"caption_full:{scene_key}",
+                "source": "caption_vqa",
+                "task_family": "scene_caption",
+                "subtask": "full_caption",
+                "images": [pano_path] if pano_path else [],
+                "messages": [
+                    {"role": "user", "content": FULL_CAPTION_PROMPT},
+                    {"role": "assistant", "content": description},
+                ],
+                "meta": {
+                    "source_record_index": record_index,
+                    "pano_path": pano_path,
+                    "mask_path": remapped.get("mask_path"),
+                    "scene_key": scene_key,
+                    "yaws_deg": remapped.get("yaws_deg"),
+                },
+            }
+        )
+
+    sections = parse_caption_sections(description)
+    for section_name, prompt in CAPTION_SECTION_PROMPTS.items():
+        answer = sections.get(section_name)
+        if not answer:
+            continue
+        items.append(
+            {
+                "id": f"caption_{slugify(section_name)}:{scene_key}",
+                "source": "caption_vqa",
+                "task_family": "scene_caption",
+                "subtask": slugify(section_name),
+                "images": [pano_path] if pano_path else [],
+                "messages": [
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": answer},
+                ],
+                "meta": {
+                    "source_record_index": record_index,
+                    "section": section_name,
+                    "pano_path": pano_path,
+                    "mask_path": remapped.get("mask_path"),
+                    "scene_key": scene_key,
+                },
+            }
+        )
+    return items
+
+
+def normalize_grounding_record(
+    *,
+    record_index: int,
+    record: Dict[str, Any],
+    drop_missing_images: bool,
+) -> Optional[Dict[str, Any]]:
+    remapped = remap_paths_in_payload(record)
+    normalized = normalize_generic_qa_record(
+        record=remapped,
+        source="replica_grounding",
+        sample_id=f"grounding:{record_index:08d}",
+        meta={"source_record_index": record_index},
+        drop_missing_images=drop_missing_images,
+    )
+    if normalized is None:
+        return None
+    normalized["task_family"] = "grounding"
+    normalized["subtask"] = "bfov_grounding"
+    return normalized
 
 
 def normalize_canonical_sample_record(
@@ -401,3 +472,13 @@ def _map_role(role: str) -> str:
         "system": "system",
     }
     return role_map.get(role, "")
+
+
+def parallel_map(items: List[Any], fn: Any, workers: int) -> List[Any]:
+    if not items:
+        return []
+    worker_count = max(1, min(workers, len(items)))
+    if worker_count == 1:
+        return [fn(item) for item in items]
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        return list(executor.map(fn, items))

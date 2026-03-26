@@ -59,8 +59,15 @@ python3 /Users/wcp/code/erp_data_pipeline/data_merge/scripts/build_sft_dataset.p
   --results-dir /workspace/data_dir/data_user/wcp/world-model/generation_pano_base/qa_generate/results_final_v2 \
   --caption-jsonl /workspace/data_dir/USB_data2/wcp_pano_training/pano_data/vqa_generation/output_v.jsonl \
   --grounding-json /workspace/data_dir/USB_data/wcp_data/ReplicaPano/grounding/pano_grounding_train_factory.json \
+  --workers 16 \
   --output-dir /workspace/data_dir/data_user/wcp/data_merge_outputs/sft_merge_v1
 ```
+
+`--workers` controls thread-level parallelism for:
+
+- scanning and parsing many `canonical_samples.jsonl` files
+- splitting caption records
+- normalizing grounding records
 
 Main files written to the output directory:
 
