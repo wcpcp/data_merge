@@ -45,17 +45,20 @@ def build_dataset(config: BuildConfig) -> Dict[str, object]:
         grounding_items = grounding_items[: config.max_grounding_records]
 
     merged_items = results_items + caption_items + grounding_items
+    training_items = [project_training_item(item) for item in merged_items]
 
     _write_jsonl(output_dir / "normalized_results_final_v2.jsonl", results_items)
     _write_jsonl(output_dir / "normalized_caption_sft.jsonl", caption_items)
     _write_jsonl(output_dir / "normalized_grounding_sft.jsonl", grounding_items)
     _write_jsonl(output_dir / "merged_sft.jsonl", merged_items)
+    _write_json(output_dir / "training_data.json", training_items)
 
     stats = {
         "results_final_v2_count": len(results_items),
         "caption_sft_count": len(caption_items),
         "grounding_count": len(grounding_items),
         "merged_total_count": len(merged_items),
+        "training_data_count": len(training_items),
         "include_full_caption": config.include_full_caption,
         "drop_missing_images": config.drop_missing_images,
         "input_paths": {
@@ -68,10 +71,39 @@ def build_dataset(config: BuildConfig) -> Dict[str, object]:
             "caption": str(output_dir / "normalized_caption_sft.jsonl"),
             "grounding": str(output_dir / "normalized_grounding_sft.jsonl"),
             "merged": str(output_dir / "merged_sft.jsonl"),
+            "training_data": str(output_dir / "training_data.json"),
         },
     }
     _write_json(output_dir / "stats.json", stats)
     return stats
+
+
+def project_training_item(item: Dict[str, object]) -> Dict[str, object]:
+    messages = []
+    image_count = len(item.get("images", [])) if isinstance(item.get("images"), list) else 0
+    user_image_tag_added = False
+
+    for raw_message in item.get("messages", []):
+        if not isinstance(raw_message, dict):
+            continue
+        role = raw_message.get("role")
+        content = str(raw_message.get("content", ""))
+        if role == "user" and image_count > 0 and not user_image_tag_added:
+            content = ensure_image_tag(content)
+            user_image_tag_added = True
+        messages.append({"role": role, "content": content})
+
+    return {
+        "messages": messages,
+        "images": list(item.get("images", [])) if isinstance(item.get("images"), list) else [],
+    }
+
+
+def ensure_image_tag(content: str) -> str:
+    stripped = content.lstrip()
+    if stripped.startswith("<image>"):
+        return content
+    return f"<image>{content}"
 
 
 def _write_jsonl(path: Path, rows: List[Dict[str, object]]) -> None:

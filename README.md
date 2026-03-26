@@ -8,27 +8,26 @@ It normalizes:
 - `output_v.jsonl`: long-form scene captions. Each panorama is expanded into multiple SFT samples, including a full caption sample plus section-level samples such as `GLOBAL LAYOUT` and `FINAL RECONSTRUCTION`.
 - `pano_grounding_train_factory.json`: existing grounding SFT items. These are kept in the same chat-style format while remapping dead path prefixes.
 
-## Output format
+## Final training format
 
-The unified output is JSONL. Each line looks like:
+The final training file is a JSON array at `training_data.json`. Each item looks like:
 
 ```json
 {
-  "id": "caption:7f8e7d6c",
-  "source": "caption_vqa",
-  "task_family": "scene_caption",
-  "subtask": "global_layout",
   "images": ["/workspace/data_dir/data_user/public_data/360video/Realsee3D/real_world_data/.../panoImage_1600.jpg"],
   "messages": [
-    {"role": "user", "content": "Describe the global layout of this 360 panorama."},
+    {"role": "user", "content": "<image>Describe the global layout of this 360 panorama."},
     {"role": "assistant", "content": "..."}
-  ],
-  "meta": {
-    "source_record_index": 0,
-    "section": "GLOBAL LAYOUT"
-  }
+  ]
 }
 ```
+
+The builder still also writes normalized debug files with metadata:
+
+- `normalized_results_final_v2.jsonl`
+- `normalized_caption_sft.jsonl`
+- `normalized_grounding_sft.jsonl`
+- `merged_sft.jsonl`
 
 ## Path remapping
 
@@ -65,6 +64,7 @@ python3 /Users/wcp/code/erp_data_pipeline/data_merge/scripts/build_sft_dataset.p
 
 Main files written to the output directory:
 
+- `training_data.json`
 - `normalized_results_final_v2.jsonl`
 - `normalized_caption_sft.jsonl`
 - `normalized_grounding_sft.jsonl`

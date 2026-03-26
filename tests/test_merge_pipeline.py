@@ -40,6 +40,7 @@ class MergePipelineTest(unittest.TestCase):
         self.assertEqual(stats["caption_sft_count"], 7)
         self.assertEqual(stats["grounding_count"], 1)
         self.assertEqual(stats["merged_total_count"], 10)
+        self.assertEqual(stats["training_data_count"], 10)
 
         merged_path = self.temp_dir / "merged_sft.jsonl"
         merged_rows = [json.loads(line) for line in merged_path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -65,6 +66,13 @@ class MergePipelineTest(unittest.TestCase):
             for image in row["images"]:
                 self.assertNotIn("/workspace/data_dir/USB_data2", image)
                 self.assertNotIn("/workspace/data_dir/USB_data", image)
+
+        training_path = self.temp_dir / "training_data.json"
+        training_rows = json.loads(training_path.read_text(encoding="utf-8"))
+        self.assertEqual(len(training_rows), 10)
+        self.assertEqual(set(training_rows[0].keys()), {"messages", "images"})
+        self.assertTrue(training_rows[0]["messages"][0]["content"].startswith("<image>"))
+        self.assertTrue(training_rows[-1]["messages"][0]["content"].startswith("<image>"))
 
     def test_parse_caption_sections(self) -> None:
         caption_path = self.mock_root / "vqa_generation" / "output_v.jsonl"
