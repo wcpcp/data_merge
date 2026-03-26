@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from .caption_parser import parse_caption_sections
-from .config import CAPTION_SECTION_PROMPTS, FULL_CAPTION_PROMPT
+from .config import CAPTION_SECTION_PROMPTS, FULL_CAPTION_PROMPT, REALSEE_PUBLIC_ROOT
 from .path_utils import remap_path, remap_paths_in_payload
 
 
@@ -30,27 +30,27 @@ def normalize_results_final_v2(results_dir: Path, drop_missing_images: bool = Fa
     if not results_dir.exists():
         raise FileNotFoundError(f"results_final_v2 directory not found: {results_dir}")
 
-    files = sorted(
-        [path for path in results_dir.rglob("*") if path.suffix.lower() in {".json", ".jsonl"} and path.is_file()]
-    )
-    counter = 0
-    for file_path in files:
-        records = _load_records(file_path)
+    canonical_files = sorted(results_dir.rglob("canonical_samples.jsonl"))
+    if not canonical_files:
+        raise FileNotFoundError(f"no canonical_samples.jsonl found under: {results_dir}")
+
+    for file_path in canonical_files:
+        scene_id, viewpoint_id = infer_scene_and_viewpoint(file_path, results_dir)
+        pano_path = build_realsee_pano_path(scene_id, viewpoint_id)
+        mask_path = build_realsee_mask_path(scene_id, viewpoint_id)
+        records = load_jsonl(file_path)
         for record_index, record in enumerate(records):
-            normalized = normalize_generic_qa_record(
+            normalized = normalize_canonical_sample_record(
                 record=record,
-                source="results_final_v2",
-                sample_id=f"results:{counter:08d}",
-                meta={
-                    "source_file": str(file_path),
-                    "source_record_index": record_index,
-                },
+                pano_path=pano_path,
+                mask_path=mask_path,
+                source_file=file_path,
+                record_index=record_index,
                 drop_missing_images=drop_missing_images,
             )
             if normalized is None:
                 continue
             items.append(normalized)
-            counter += 1
     return items
 
 
@@ -149,6 +149,48 @@ def normalize_grounding_records(grounding_json: Path, drop_missing_images: bool 
     return items
 
 
+def normalize_canonical_sample_record(
+    *,
+    record: Dict[str, Any],
+    pano_path: str,
+    mask_path: str,
+    source_file: Path,
+    record_index: int,
+    drop_missing_images: bool = False,
+) -> Optional[Dict[str, Any]]:
+    messages = extract_messages(record)
+    if not messages:
+        return None
+    images = [pano_path] if pano_path else []
+    if drop_missing_images and not images:
+        return None
+
+    return {
+        "id": str(record.get("sample_id", f"results:{record_index:08d}")),
+        "source": "results_final_v2",
+        "task_family": str(record.get("task_family", "generic_qa")),
+        "subtask": str(record.get("generation_mode", record.get("task_family", "default"))),
+        "images": images,
+        "messages": messages,
+        "meta": {
+            "scene_id": record.get("scene_id"),
+            "source_file": str(source_file),
+            "source_record_index": record_index,
+            "derived_pano_path": pano_path,
+            "derived_mask_path": mask_path,
+            "postprocess_disposition": record.get("postprocess_disposition"),
+            "postprocess_job_id": record.get("postprocess_job_id"),
+            "extra_fields": remap_paths_in_payload(
+                {
+                    key: value
+                    for key, value in record.items()
+                    if key not in {"messages", "sample_id", "scene_id", "task_family", "canonical_question", "canonical_answer"}
+                }
+            ),
+        },
+    }
+
+
 def normalize_generic_qa_record(
     *,
     record: Dict[str, Any],
@@ -193,6 +235,7 @@ def extract_messages(record: Dict[str, Any]) -> List[Dict[str, str]]:
     question = first_nonempty(
         record,
         [
+            "canonical_question",
             "question",
             "query",
             "prompt",
@@ -206,6 +249,8 @@ def extract_messages(record: Dict[str, Any]) -> List[Dict[str, str]]:
     answer = first_nonempty(
         record,
         [
+            "answer_text",
+            "canonical_answer",
             "answer",
             "response",
             "output",
@@ -291,6 +336,23 @@ def build_scene_key(record: Dict[str, Any], record_index: int) -> str:
             return f"{scene_part}_{view_id}"
         return path.stem
     return f"record_{record_index:06d}"
+
+
+def infer_scene_and_viewpoint(file_path: Path, results_dir: Path) -> tuple[str, str]:
+    relative = file_path.relative_to(results_dir)
+    if len(relative.parts) < 3:
+        raise ValueError(f"unexpected canonical_samples.jsonl layout: {file_path}")
+    scene_id = relative.parts[0]
+    viewpoint_id = relative.parts[1]
+    return scene_id, viewpoint_id
+
+
+def build_realsee_pano_path(scene_id: str, viewpoint_id: str) -> str:
+    return f"{REALSEE_PUBLIC_ROOT}/{scene_id}/viewpoints/{viewpoint_id}/panoImage_1600.jpg"
+
+
+def build_realsee_mask_path(scene_id: str, viewpoint_id: str) -> str:
+    return f"{REALSEE_PUBLIC_ROOT}/{scene_id}/viewpoints/{viewpoint_id}/pano_mask.png"
 
 
 def slugify(value: str) -> str:

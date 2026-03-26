@@ -4,7 +4,7 @@
 
 It normalizes:
 
-- `results_final_v2`: existing QA/template outputs. The merger recursively scans `.json` and `.jsonl` files and converts common QA formats into `messages + images`.
+- `results_final_v2`: canonical samples only. The merger recursively reads `scene_id/viewpoint_id/canonical_samples.jsonl`, and for each sample derives the ERP image path as `Realsee3D/real_world_data/{scene_id}/viewpoints/{viewpoint_id}/panoImage_1600.jpg`.
 - `output_v.jsonl`: long-form scene captions. Each panorama is expanded into multiple SFT samples, including a full caption sample plus section-level samples such as `GLOBAL LAYOUT` and `FINAL RECONSTRUCTION`.
 - `pano_grounding_train_factory.json`: existing grounding SFT items. These are kept in the same chat-style format while remapping dead path prefixes.
 
@@ -49,7 +49,7 @@ python3 /Users/wcp/code/erp_data_pipeline/data_merge/scripts/build_sft_dataset.p
 
 That mock bundle includes:
 
-- 2 `results_final_v2`-style records
+- 2 `canonical_samples.jsonl` records under `results_final_v2/scene_00001/1753781394/`
 - 1 caption record that is split into 7 SFT samples
 - 1 grounding record
 

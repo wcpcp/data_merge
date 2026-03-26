@@ -45,6 +45,18 @@ class MergePipelineTest(unittest.TestCase):
         merged_rows = [json.loads(line) for line in merged_path.read_text(encoding="utf-8").splitlines() if line.strip()]
         self.assertEqual(len(merged_rows), 10)
 
+        results_rows = [row for row in merged_rows if row["source"] == "results_final_v2"]
+        self.assertEqual(len(results_rows), 2)
+        self.assertTrue(all(row["id"].startswith("scene_00001:") for row in results_rows))
+        self.assertTrue(
+            all(
+                row["images"] == [
+                    "/workspace/data_dir/data_user/public_data/360video/Realsee3D/real_world_data/scene_00001/viewpoints/1753781394/panoImage_1600.jpg"
+                ]
+                for row in results_rows
+            )
+        )
+
         caption_rows = [row for row in merged_rows if row["source"] == "caption_vqa"]
         self.assertTrue(any(row["subtask"] == "full_caption" for row in caption_rows))
         self.assertTrue(any(row["subtask"] == "global_layout" for row in caption_rows))
