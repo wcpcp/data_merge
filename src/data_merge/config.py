@@ -34,3 +34,9 @@ CAPTION_SECTION_PROMPTS = OrderedDict(
 )
 
 FULL_CAPTION_PROMPT = "Provide a detailed full-scene caption for this 360 panorama."
+
+ERP_MULTIMODAL_SYSTEM_PROMPT = """You are a multimodal assistant specialized in ERP (equirectangular projection) panoramic image understanding.
+
+The input image is a 360-degree panorama represented in ERP format. You must understand it as a continuous surrounding scene rather than a normal perspective image. The horizontal dimension wraps around, so the left and right boundaries may correspond to adjacent directions in real space.
+
+Your job is to understand the panoramic scene faithfully and complete image-grounded tasks such as recognition, captioning, attribute description, existence checking, counting, grounding, scene understanding, directional reasoning, depth comparison, and 3D spatial relation reasoning."""

@@ -12,7 +12,13 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from data_merge.builder import DEFAULT_WORKERS, BuildConfig, build_dataset
+from data_merge.builder import (
+    DEFAULT_WORKERS,
+    TRAINING_FORMAT_MULTIMODAL_BLOCKS,
+    TRAINING_FORMAT_SIMPLE,
+    BuildConfig,
+    build_dataset,
+)
 from data_merge.config import DEFAULT_CAPTION_JSONL, DEFAULT_GROUNDING_JSON, DEFAULT_RESULTS_DIR
 
 
@@ -26,6 +32,12 @@ def main() -> int:
     parser.add_argument("--no-full-caption", action="store_true", help="Do not emit the full-caption sample for each caption record.")
     parser.add_argument("--drop-missing-images", action="store_true", help="Skip samples that do not have usable images.")
     parser.add_argument("--workers", type=int, default=None, help="Thread worker count for parallel normalization.")
+    parser.add_argument(
+        "--training-format",
+        default=TRAINING_FORMAT_SIMPLE,
+        choices=[TRAINING_FORMAT_SIMPLE, TRAINING_FORMAT_MULTIMODAL_BLOCKS],
+        help="Final training export format.",
+    )
     parser.add_argument("--max-results-records", type=int, help="Optional cap for normalized results_final_v2 records.")
     parser.add_argument("--max-caption-records", type=int, help="Optional cap for caption-derived SFT records.")
     parser.add_argument("--max-grounding-records", type=int, help="Optional cap for grounding records.")
@@ -51,6 +63,7 @@ def main() -> int:
         include_full_caption=not args.no_full_caption,
         drop_missing_images=args.drop_missing_images,
         workers=args.workers if args.workers is not None else DEFAULT_WORKERS,
+        training_format=args.training_format,
         max_results_records=args.max_results_records,
         max_caption_records=args.max_caption_records,
         max_grounding_records=args.max_grounding_records,

@@ -14,7 +14,7 @@ import sys
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from data_merge.builder import BuildConfig, build_dataset
+from data_merge.builder import TRAINING_FORMAT_MULTIMODAL_BLOCKS, BuildConfig, build_dataset
 from data_merge.caption_parser import parse_caption_sections
 from data_merge.normalizers import normalize_caption_record
 
@@ -43,6 +43,7 @@ class MergePipelineTest(unittest.TestCase):
         self.assertEqual(stats["grounding_count"], 1)
         self.assertEqual(stats["merged_total_count"], 10)
         self.assertEqual(stats["training_data_count"], 10)
+        self.assertEqual(stats["training_format"], "simple")
         self.assertEqual(stats["workers"], 2)
 
         merged_path = self.temp_dir / "merged_sft.jsonl"
@@ -76,6 +77,32 @@ class MergePipelineTest(unittest.TestCase):
         self.assertEqual(set(training_rows[0].keys()), {"messages", "images"})
         self.assertTrue(training_rows[0]["messages"][0]["content"].startswith("<image>"))
         self.assertTrue(training_rows[-1]["messages"][0]["content"].startswith("<image>"))
+
+    def test_build_multimodal_block_training_format(self) -> None:
+        stats = build_dataset(
+            BuildConfig(
+                results_dir=self.mock_root / "results_final_v2",
+                caption_jsonl=self.mock_root / "vqa_generation" / "output_v.jsonl",
+                grounding_json=self.mock_root / "grounding" / "pano_grounding_train_factory.json",
+                output_dir=self.temp_dir,
+                workers=2,
+                training_format=TRAINING_FORMAT_MULTIMODAL_BLOCKS,
+            )
+        )
+
+        self.assertEqual(stats["training_format"], TRAINING_FORMAT_MULTIMODAL_BLOCKS)
+        training_path = self.temp_dir / "training_data_multimodal_blocks.json"
+        training_rows = json.loads(training_path.read_text(encoding="utf-8"))
+        self.assertEqual(len(training_rows), 10)
+        self.assertIn("id", training_rows[0])
+        self.assertEqual(training_rows[0]["messages"][0]["role"], "system")
+        self.assertEqual(training_rows[0]["messages"][0]["content"][0]["type"], "text")
+        self.assertIn("ERP", training_rows[0]["messages"][0]["content"][0]["text"])
+        self.assertEqual(training_rows[0]["messages"][1]["role"], "user")
+        self.assertEqual(training_rows[0]["messages"][1]["content"][0]["type"], "text")
+        self.assertEqual(training_rows[0]["messages"][1]["content"][1]["type"], "image")
+        self.assertEqual(training_rows[0]["messages"][-1]["role"], "assistant")
+        self.assertEqual(training_rows[0]["messages"][-1]["content"][0]["type"], "text")
 
     def test_parse_caption_sections(self) -> None:
         caption_path = self.mock_root / "vqa_generation" / "output_v.jsonl"
