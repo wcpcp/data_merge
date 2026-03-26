@@ -142,11 +142,13 @@ def normalize_caption_record(
     drop_missing_images: bool,
 ) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
+    if not isinstance(record, dict):
+        return items
     remapped = remap_paths_in_payload(record)
-    pano_path = remapped.get("pano_path")
+    pano_path = normalize_optional_string(remapped.get("pano_path"))
     if not pano_path and drop_missing_images:
         return items
-    description = remapped.get("description", "").strip()
+    description = normalize_optional_string(remapped.get("description"))
     scene_key = build_scene_key(remapped, record_index)
 
     if include_full_caption and description:
@@ -164,7 +166,7 @@ def normalize_caption_record(
                 "meta": {
                     "source_record_index": record_index,
                     "pano_path": pano_path,
-                    "mask_path": remapped.get("mask_path"),
+                    "mask_path": normalize_optional_string(remapped.get("mask_path")),
                     "scene_key": scene_key,
                     "yaws_deg": remapped.get("yaws_deg"),
                 },
@@ -191,7 +193,7 @@ def normalize_caption_record(
                     "source_record_index": record_index,
                     "section": section_name,
                     "pano_path": pano_path,
-                    "mask_path": remapped.get("mask_path"),
+                    "mask_path": normalize_optional_string(remapped.get("mask_path")),
                     "scene_key": scene_key,
                 },
             }
@@ -433,8 +435,19 @@ def slugify(value: str) -> str:
 def first_nonempty(record: Dict[str, Any], keys: Iterable[str]) -> str:
     for key in keys:
         value = record.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+        normalized = normalize_optional_string(value)
+        if normalized:
+            return normalized
+    return ""
+
+
+def normalize_optional_string(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value).strip()
     return ""
 
 

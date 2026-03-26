@@ -16,6 +16,7 @@ if str(SRC) not in sys.path:
 
 from data_merge.builder import BuildConfig, build_dataset
 from data_merge.caption_parser import parse_caption_sections
+from data_merge.normalizers import normalize_caption_record
 
 
 class MergePipelineTest(unittest.TestCase):
@@ -83,6 +84,19 @@ class MergePipelineTest(unittest.TestCase):
         self.assertIn("GLOBAL LAYOUT", sections)
         self.assertIn("FINAL RECONSTRUCTION", sections)
         self.assertIn("kitchen", sections["GLOBAL LAYOUT"].lower())
+
+    def test_caption_record_with_null_description_does_not_crash(self) -> None:
+        items = normalize_caption_record(
+            record_index=0,
+            record={
+                "pano_path": "/workspace/data_dir/USB_data2/wcp_pano_training/vqa_generation/real_world_data/scene_x/viewpoints/1/panoImage_1600.jpg",
+                "description": None,
+                "mask_path": None,
+            },
+            include_full_caption=True,
+            drop_missing_images=False,
+        )
+        self.assertEqual(items, [])
 
 
 if __name__ == "__main__":
