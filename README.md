@@ -136,3 +136,55 @@ Main files written to the output directory:
 ```bash
 python3 -m unittest discover -s /Users/wcp/code/erp_data_pipeline/data_merge/tests
 ```
+
+## Video Extraction
+
+To uniformly sample ERP video frames from the two outdoor video sources:
+
+```bash
+python3 /Users/wcp/code/erp_data_pipeline/data_merge/scripts/extract_uniform_video_frames.py \
+  --sphere360-dir /workspace/data_dir/data_user/public_data/360video/Sphere360/videos \
+  --panowan-dir /workspace/data_dir/data_user/public_data/360video/panowan \
+  --output-images-root /workspace/data_dir/data_user/public_data/360video/outdoor/images \
+  --output-manifest /workspace/data_dir/data_user/public_data/360video/outdoor/frame_manifest.json \
+  --frames-per-video 5 \
+  --workers 16
+```
+
+Behavior:
+
+- Samples 5 frames per video at uniform time positions along the timeline.
+- Saves frames under `outdoor/images/{dataset}/{relative_video_path_without_suffix}/frame_00.jpg`.
+- Writes one final JSON manifest at `frame_manifest.json`.
+- If the 5 expected frames already exist, the script reuses them by default so interrupted runs can resume safely.
+- Add `--overwrite` to force re-extraction.
+
+The manifest structure is:
+
+```json
+{
+  "summary": {
+    "video_count": 18011,
+    "frames_per_video": 5,
+    "total_extracted_images": 90055
+  },
+  "videos": [
+    {
+      "dataset": "Sphere360",
+      "source_video_path": "/workspace/.../demo.mp4",
+      "relative_video_path": "subdir/demo.mp4",
+      "output_dir": "/workspace/.../outdoor/images/Sphere360/subdir/demo",
+      "duration_sec": 10.021,
+      "status": "ok",
+      "frame_count_extracted": 5,
+      "frames": [
+        {
+          "frame_index": 0,
+          "timestamp_sec": 1.0021,
+          "image_path": "/workspace/.../frame_00.jpg"
+        }
+      ]
+    }
+  ]
+}
+```
