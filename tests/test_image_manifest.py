@@ -53,13 +53,9 @@ class ImageManifestTest(unittest.TestCase):
 
         self.assertEqual(payload["summary"]["image_count"], 1)
         self.assertEqual(payload["summary"]["metadata_match_count"], 1)
-        image_record = payload["images"][0]
-        self.assertEqual(image_record["dataset"], "real_360_test")
-        self.assertEqual(image_record["source"], "commons")
-        self.assertEqual(image_record["title"], "Demo Panorama")
-        self.assertEqual(image_record["width"], 4096)
-        self.assertEqual(image_record["height"], 2048)
-        self.assertTrue(image_record["metadata_match_found"])
+        image_record = payload["records"][0]
+        self.assertEqual(image_record["image_path"], str(image_root / f"{stem}.jpg"))
+        self.assertEqual(image_record["source"], "File:Demo Panorama.jpg")
 
 
 if __name__ == "__main__":

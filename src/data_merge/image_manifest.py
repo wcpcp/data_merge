@@ -53,20 +53,28 @@ def build_image_manifest(config: ImageManifestConfig) -> Dict[str, Any]:
         workers=config.workers,
     )
 
-    payload = {
-        "summary": build_image_summary(
-            dataset_root=dataset_root,
-            image_root=image_root,
-            dataset_name=config.dataset_name,
-            records=records,
-            workers=config.workers,
-        ),
-        "images": records,
-    }
+    summary = build_image_summary(
+        dataset_root=dataset_root,
+        image_root=image_root,
+        dataset_name=config.dataset_name,
+        records=records,
+        workers=config.workers,
+    )
+    manifest_rows = [
+        {
+            "image_path": str(record.get("image_path", "")),
+            "source": choose_image_source(record),
+        }
+        for record in records
+        if str(record.get("image_path", ""))
+    ]
     config.output_manifest_path.parent.mkdir(parents=True, exist_ok=True)
     with config.output_manifest_path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-    return payload
+        json.dump(manifest_rows, handle, ensure_ascii=False, indent=2)
+    return {
+        "summary": summary,
+        "records": manifest_rows,
+    }
 
 
 def resolve_image_root(dataset_root: Path) -> Path:
@@ -166,6 +174,14 @@ def build_image_summary(
         "extension_counts": extension_counts,
         "source_counts": source_counts,
     }
+
+
+def choose_image_source(record: Dict[str, Any]) -> str:
+    for key in ["landing_url", "file_url", "source_id", "source", "relative_image_path", "image_path"]:
+        value = record.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def stable_stem(row: Dict[str, object]) -> str:

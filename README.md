@@ -159,34 +159,15 @@ Behavior:
 - If the 5 expected frames already exist, the script reuses them by default so interrupted runs can resume safely.
 - Add `--overwrite` to force re-extraction.
 
-The manifest structure is:
+The manifest structure is a simple JSON list:
 
 ```json
-{
-  "summary": {
-    "video_count": 18011,
-    "frames_per_video": 5,
-    "total_extracted_images": 90055
-  },
-  "videos": [
-    {
-      "dataset": "Sphere360",
-      "source_video_path": "/workspace/.../demo.mp4",
-      "relative_video_path": "subdir/demo.mp4",
-      "output_dir": "/workspace/.../outdoor/images/Sphere360/subdir/demo",
-      "duration_sec": 10.021,
-      "status": "ok",
-      "frame_count_extracted": 5,
-      "frames": [
-        {
-          "frame_index": 0,
-          "timestamp_sec": 1.0021,
-          "image_path": "/workspace/.../frame_00.jpg"
-        }
-      ]
-    }
-  ]
-}
+[
+  {
+    "image_path": "/workspace/.../outdoor/images/Sphere360/subdir/demo/frame_00.jpg",
+    "source": "/workspace/.../Sphere360/videos/subdir/demo.mp4"
+  }
+]
 ```
 
 ## Benchmark Image Manifest
@@ -210,31 +191,15 @@ This script:
 - auto-detects `images/` under the dataset root if present
 - scans all common image files
 - tries to match each image filename back to `search_results.jsonl`
-- writes a single manifest JSON with summary plus one record per image
+- writes a simple JSON list with one record per image
 
 Example output structure:
 
 ```json
-{
-  "summary": {
-    "dataset": "real_360_test",
-    "image_count": 1015,
-    "metadata_match_count": 1015
-  },
-  "images": [
-    {
-      "dataset": "real_360_test",
-      "image_path": "/workspace/.../images/commons__File_Demo.jpg",
-      "relative_image_path": "commons__File_Demo.jpg",
-      "source": "commons",
-      "source_id": "File:Demo.jpg",
-      "provider": "wikimedia_commons",
-      "title": "Demo",
-      "caption": "A demo ERP image.",
-      "width": 4096,
-      "height": 2048,
-      "license": "CC BY-SA 4.0"
-    }
-  ]
-}
+[
+  {
+    "image_path": "/workspace/.../images/commons__File_Demo.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:Demo.jpg"
+  }
+]
 ```

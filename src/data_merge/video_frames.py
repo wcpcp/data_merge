@@ -62,13 +62,13 @@ def extract_uniform_video_frames(config: VideoFrameExtractionConfig) -> Dict[str
     )
 
     summary = build_summary(records, config)
-    payload = {
-        "summary": summary,
-        "videos": records,
-    }
+    manifest_rows = build_frame_manifest_rows(records)
     with config.output_manifest_path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-    return payload
+        json.dump(manifest_rows, handle, ensure_ascii=False, indent=2)
+    return {
+        "summary": summary,
+        "records": manifest_rows,
+    }
 
 
 def discover_video_jobs(sources: Sequence[VideoSource]) -> List[Tuple[str, Path, Path]]:
@@ -308,6 +308,23 @@ def build_summary(records: Sequence[Dict[str, Any]], config: VideoFrameExtractio
         "status_counts": status_counts,
         "dataset_counts": dataset_counts,
     }
+
+
+def build_frame_manifest_rows(records: Sequence[Dict[str, Any]]) -> List[Dict[str, str]]:
+    rows: List[Dict[str, str]] = []
+    for record in records:
+        source = str(record.get("source_video_path", ""))
+        for frame in record.get("frames", []):
+            image_path = str(frame.get("image_path", ""))
+            if not image_path:
+                continue
+            rows.append(
+                {
+                    "image_path": image_path,
+                    "source": source,
+                }
+            )
+    return rows
 
 
 def expected_output_paths(output_dir: Path, frames_per_video: int, image_extension: str) -> List[Path]:
