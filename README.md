@@ -188,3 +188,53 @@ The manifest structure is:
   ]
 }
 ```
+
+## Benchmark Image Manifest
+
+If you already have a benchmark image directory copied to:
+
+- `/workspace/data_dir/data_user/public_data/360video/outdoor/test`
+
+you can build a manifest JSON for those images with:
+
+```bash
+python3 /Users/wcp/code/erp_data_pipeline/data_merge/scripts/build_image_manifest.py \
+  --dataset-root /workspace/data_dir/data_user/public_data/360video/outdoor/test \
+  --output-manifest /workspace/data_dir/data_user/public_data/360video/outdoor/test/image_manifest.json \
+  --dataset-name real_360_test \
+  --workers 16
+```
+
+This script:
+
+- auto-detects `images/` under the dataset root if present
+- scans all common image files
+- tries to match each image filename back to `search_results.jsonl`
+- writes a single manifest JSON with summary plus one record per image
+
+Example output structure:
+
+```json
+{
+  "summary": {
+    "dataset": "real_360_test",
+    "image_count": 1015,
+    "metadata_match_count": 1015
+  },
+  "images": [
+    {
+      "dataset": "real_360_test",
+      "image_path": "/workspace/.../images/commons__File_Demo.jpg",
+      "relative_image_path": "commons__File_Demo.jpg",
+      "source": "commons",
+      "source_id": "File:Demo.jpg",
+      "provider": "wikimedia_commons",
+      "title": "Demo",
+      "caption": "A demo ERP image.",
+      "width": 4096,
+      "height": 2048,
+      "license": "CC BY-SA 4.0"
+    }
+  ]
+}
+```
