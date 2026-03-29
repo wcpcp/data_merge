@@ -11,7 +11,12 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from data_merge.video_frames import compute_uniform_frame_indices, compute_uniform_timestamps, expected_output_paths
+from data_merge.video_frames import (
+    build_frame_manifest_rows,
+    compute_uniform_frame_indices,
+    compute_uniform_timestamps,
+    expected_output_paths,
+)
 
 
 class VideoFramesTest(unittest.TestCase):
@@ -28,6 +33,29 @@ class VideoFramesTest(unittest.TestCase):
         self.assertEqual(
             [str(path) for path in paths],
             ["/tmp/demo/frame_00.jpg", "/tmp/demo/frame_01.jpg", "/tmp/demo/frame_02.jpg"],
+        )
+
+    def test_build_frame_manifest_rows_uses_short_ids(self) -> None:
+        rows = build_frame_manifest_rows(
+            [
+                {
+                    "source_video_path": "/workspace/data_dir/data_user/public_data/360video/Sphere360/videos/-076WPWoCRE_137.0_152.0.mp4",
+                    "frames": [
+                        {"image_path": "/workspace/data_dir/data_user/public_data/360video/outdoor/images/Sphere360/-076WPWoCRE_137.0_152.0/frame_00.jpg"}
+                    ],
+                }
+            ]
+        )
+        self.assertEqual(
+            rows,
+            [
+                {
+                    "image_path": "/workspace/data_dir/data_user/public_data/360video/outdoor/images/Sphere360/-076WPWoCRE_137.0_152.0/frame_00.jpg",
+                    "source": "/workspace/data_dir/data_user/public_data/360video/Sphere360/videos/-076WPWoCRE_137.0_152.0.mp4",
+                    "scene_id": "-076WPWoCRE_137.0_152.0",
+                    "viewpoint_id": "frame_00",
+                }
+            ],
         )
 
 

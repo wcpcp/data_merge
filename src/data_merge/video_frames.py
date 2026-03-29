@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import shutil
 import subprocess
@@ -9,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+from .image_ops import resize_image_in_place
 
 
 COMMON_VIDEO_EXTENSIONS = {
@@ -43,6 +44,8 @@ class VideoFrameExtractionConfig:
     workers: int = min(16, (os.cpu_count() or 4))
     overwrite: bool = False
     image_extension: str = ".jpg"
+    resize_width: int = 2048
+    resize_height: int = 1024
 
 
 def extract_uniform_video_frames(config: VideoFrameExtractionConfig) -> Dict[str, Any]:
@@ -99,6 +102,8 @@ def process_video_job(
 
     existing_paths = expected_output_paths(output_dir, config.frames_per_video, config.image_extension)
     if not config.overwrite and all(path.exists() for path in existing_paths):
+        for path in existing_paths:
+            resize_image_in_place(path, config.resize_width, config.resize_height)
         return build_existing_record(
             dataset_name=dataset_name,
             source_root=source_root,
@@ -121,6 +126,8 @@ def process_video_job(
                 output_dir=output_dir,
                 frames_per_video=config.frames_per_video,
                 image_extension=config.image_extension,
+                resize_width=config.resize_width,
+                resize_height=config.resize_height,
             )
         else:
             record = extract_with_opencv(
@@ -130,6 +137,8 @@ def process_video_job(
                 output_dir=output_dir,
                 frames_per_video=config.frames_per_video,
                 image_extension=config.image_extension,
+                resize_width=config.resize_width,
+                resize_height=config.resize_height,
             )
         record["backend"] = backend
         return record
@@ -153,13 +162,15 @@ def extract_with_ffmpeg(
     output_dir: Path,
     frames_per_video: int,
     image_extension: str,
+    resize_width: int,
+    resize_height: int,
 ) -> Dict[str, Any]:
     duration_sec = probe_duration_ffmpeg(video_path)
     timestamps = compute_uniform_timestamps(duration_sec, frames_per_video)
     frame_records = []
     for index, timestamp_sec in enumerate(timestamps):
         output_path = output_dir / f"frame_{index:02d}{image_extension}"
-        extract_one_frame_ffmpeg(video_path, output_path, timestamp_sec)
+        extract_one_frame_ffmpeg(video_path, output_path, timestamp_sec, resize_width, resize_height)
         frame_records.append(
             {
                 "frame_index": index,
@@ -187,6 +198,8 @@ def extract_with_opencv(
     output_dir: Path,
     frames_per_video: int,
     image_extension: str,
+    resize_width: int,
+    resize_height: int,
 ) -> Dict[str, Any]:
     import cv2
 
@@ -207,6 +220,7 @@ def extract_with_opencv(
             ok, frame = cap.read()
             if not ok:
                 raise RuntimeError(f"failed to decode frame {frame_index} from {video_path}")
+            frame = cv2.resize(frame, (resize_width, resize_height), interpolation=cv2.INTER_AREA)
             if not cv2.imwrite(str(output_path), frame):
                 raise RuntimeError(f"failed to write frame image: {output_path}")
             timestamp_sec = frame_index / fps if fps > 0 else 0.0
@@ -314,14 +328,18 @@ def build_frame_manifest_rows(records: Sequence[Dict[str, Any]]) -> List[Dict[st
     rows: List[Dict[str, str]] = []
     for record in records:
         source = str(record.get("source_video_path", ""))
+        scene_id = build_scene_id_from_video_source(source)
         for frame in record.get("frames", []):
             image_path = str(frame.get("image_path", ""))
             if not image_path:
                 continue
+            viewpoint_id = Path(image_path).stem
             rows.append(
                 {
                     "image_path": image_path,
                     "source": source,
+                    "scene_id": scene_id,
+                    "viewpoint_id": viewpoint_id,
                 }
             )
     return rows
@@ -385,7 +403,13 @@ def probe_duration_ffmpeg(video_path: Path) -> float:
     return float(output)
 
 
-def extract_one_frame_ffmpeg(video_path: Path, output_path: Path, timestamp_sec: float) -> None:
+def extract_one_frame_ffmpeg(
+    video_path: Path,
+    output_path: Path,
+    timestamp_sec: float,
+    resize_width: int,
+    resize_height: int,
+) -> None:
     subprocess.run(
         [
             "ffmpeg",
@@ -394,6 +418,8 @@ def extract_one_frame_ffmpeg(video_path: Path, output_path: Path, timestamp_sec:
             f"{timestamp_sec:.6f}",
             "-i",
             str(video_path),
+            "-vf",
+            f"scale={resize_width}:{resize_height}:flags=lanczos",
             "-frames:v",
             "1",
             "-q:v",
@@ -404,6 +430,10 @@ def extract_one_frame_ffmpeg(video_path: Path, output_path: Path, timestamp_sec:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+
+
+def build_scene_id_from_video_source(source_video_path: str) -> str:
+    return Path(source_video_path).stem
 
 
 def parallel_map(items: Sequence[Any], fn: Any, workers: int) -> List[Any]:

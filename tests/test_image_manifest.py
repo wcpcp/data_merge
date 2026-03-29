@@ -39,7 +39,7 @@ class ImageManifestTest(unittest.TestCase):
             "is_360": True,
         }
         stem = stable_stem(row)
-        (image_root / f"{stem}.jpg").write_bytes(b"fake-image")
+        self._write_test_image(image_root / f"{stem}.jpg", 64, 32)
         (dataset_root / "search_results.jsonl").write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
 
         payload = build_image_manifest(
@@ -56,6 +56,26 @@ class ImageManifestTest(unittest.TestCase):
         image_record = payload["records"][0]
         self.assertEqual(image_record["image_path"], str(image_root / f"{stem}.jpg"))
         self.assertEqual(image_record["source"], "File:Demo Panorama.jpg")
+        self.assertEqual(image_record["scene_id"], stem)
+        self.assertEqual(image_record["viewpoint_id"], stem)
+
+    def _write_test_image(self, path: Path, width: int, height: int) -> None:
+        try:
+            from PIL import Image
+
+            image = Image.new("RGB", (width, height), color=(120, 80, 40))
+            image.save(path)
+            return
+        except Exception:
+            pass
+
+        import cv2
+        import numpy as np
+
+        array = np.zeros((height, width, 3), dtype=np.uint8)
+        array[:, :] = (40, 80, 120)
+        if not cv2.imwrite(str(path), array):
+            raise RuntimeError(f"failed to create test image: {path}")
 
 
 if __name__ == "__main__":

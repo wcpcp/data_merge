@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from .image_ops import resize_image_in_place
+
 
 COMMON_IMAGE_EXTENSIONS = {
     ".jpg",
@@ -28,6 +30,8 @@ class ImageManifestConfig:
     output_manifest_path: Path
     dataset_name: str = "real_360_test"
     workers: int = min(16, (os.cpu_count() or 4))
+    resize_width: int = 2048
+    resize_height: int = 1024
 
 
 def build_image_manifest(config: ImageManifestConfig) -> Dict[str, Any]:
@@ -49,6 +53,8 @@ def build_image_manifest(config: ImageManifestConfig) -> Dict[str, Any]:
             dataset_root=dataset_root,
             dataset_name=config.dataset_name,
             metadata_index=metadata_index,
+            resize_width=config.resize_width,
+            resize_height=config.resize_height,
         ),
         workers=config.workers,
     )
@@ -64,6 +70,8 @@ def build_image_manifest(config: ImageManifestConfig) -> Dict[str, Any]:
         {
             "image_path": str(record.get("image_path", "")),
             "source": choose_image_source(record),
+            "scene_id": str(record.get("scene_id", "")),
+            "viewpoint_id": str(record.get("viewpoint_id", "")),
         }
         for record in records
         if str(record.get("image_path", ""))
@@ -105,7 +113,10 @@ def build_image_record(
     dataset_root: Path,
     dataset_name: str,
     metadata_index: Dict[str, Dict[str, Any]],
+    resize_width: int,
+    resize_height: int,
 ) -> Dict[str, Any]:
+    resize_image_in_place(path, resize_width, resize_height)
     stat = path.stat()
     relative_image_path = path.relative_to(image_root)
     stem_key = path.stem
@@ -119,6 +130,8 @@ def build_image_record(
         "image_root": str(image_root),
         "filename": path.name,
         "stem": path.stem,
+        "scene_id": path.stem,
+        "viewpoint_id": path.stem,
         "suffix": path.suffix.lower(),
         "file_size_bytes": stat.st_size,
         "metadata_match_found": matched is not None,

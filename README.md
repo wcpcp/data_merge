@@ -148,12 +148,15 @@ python3 /Users/wcp/code/erp_data_pipeline/data_merge/scripts/extract_uniform_vid
   --output-images-root /workspace/data_dir/data_user/public_data/360video/outdoor/images \
   --output-manifest /workspace/data_dir/data_user/public_data/360video/outdoor/frame_manifest.json \
   --frames-per-video 5 \
+  --resize-width 2048 \
+  --resize-height 1024 \
   --workers 16
 ```
 
 Behavior:
 
 - Samples 5 frames per video at uniform time positions along the timeline.
+- Resizes every extracted frame directly to `2048x1024`.
 - Saves frames under `outdoor/images/{dataset}/{relative_video_path_without_suffix}/frame_00.jpg`.
 - Writes one final JSON manifest at `frame_manifest.json`.
 - If the 5 expected frames already exist, the script reuses them by default so interrupted runs can resume safely.
@@ -165,7 +168,9 @@ The manifest structure is a simple JSON list:
 [
   {
     "image_path": "/workspace/.../outdoor/images/Sphere360/subdir/demo/frame_00.jpg",
-    "source": "/workspace/.../Sphere360/videos/subdir/demo.mp4"
+    "source": "/workspace/.../Sphere360/videos/subdir/demo.mp4",
+    "scene_id": "demo",
+    "viewpoint_id": "frame_00"
   }
 ]
 ```
@@ -183,6 +188,8 @@ python3 /Users/wcp/code/erp_data_pipeline/data_merge/scripts/build_image_manifes
   --dataset-root /workspace/data_dir/data_user/public_data/360video/outdoor/test \
   --output-manifest /workspace/data_dir/data_user/public_data/360video/outdoor/test/image_manifest.json \
   --dataset-name real_360_test \
+  --resize-width 2048 \
+  --resize-height 1024 \
   --workers 16
 ```
 
@@ -190,6 +197,7 @@ This script:
 
 - auto-detects `images/` under the dataset root if present
 - scans all common image files
+- resizes every image in place to `2048x1024`
 - tries to match each image filename back to `search_results.jsonl`
 - writes a simple JSON list with one record per image
 
@@ -199,7 +207,9 @@ Example output structure:
 [
   {
     "image_path": "/workspace/.../images/commons__File_Demo.jpg",
-    "source": "https://commons.wikimedia.org/wiki/File:Demo.jpg"
+    "source": "https://commons.wikimedia.org/wiki/File:Demo.jpg",
+    "scene_id": "commons__File_Demo",
+    "viewpoint_id": "commons__File_Demo"
   }
 ]
 ```

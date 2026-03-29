@@ -29,6 +29,8 @@ def main() -> int:
     parser.add_argument("--output-manifest", default=DEFAULT_OUTPUT_MANIFEST, help="Final JSON manifest path.")
     parser.add_argument("--frames-per-video", type=int, default=5, help="Number of uniformly sampled frames per video.")
     parser.add_argument("--workers", type=int, default=16, help="Parallel worker count.")
+    parser.add_argument("--resize-width", type=int, default=2048, help="Output image width.")
+    parser.add_argument("--resize-height", type=int, default=1024, help="Output image height.")
     parser.add_argument("--overwrite", action="store_true", help="Re-extract frames even if outputs already exist.")
     args = parser.parse_args()
 
@@ -42,6 +44,8 @@ def main() -> int:
         frames_per_video=args.frames_per_video,
         workers=args.workers,
         overwrite=args.overwrite,
+        resize_width=args.resize_width,
+        resize_height=args.resize_height,
     )
     payload = extract_uniform_video_frames(config)
     print(json.dumps(payload["summary"], ensure_ascii=False, indent=2))

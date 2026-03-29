@@ -25,6 +25,8 @@ def main() -> int:
     parser.add_argument("--output-manifest", default=DEFAULT_OUTPUT_MANIFEST, help="Output JSON manifest path.")
     parser.add_argument("--dataset-name", default="real_360_test", help="Dataset name written into the manifest.")
     parser.add_argument("--workers", type=int, default=16, help="Parallel worker count.")
+    parser.add_argument("--resize-width", type=int, default=2048, help="Output image width.")
+    parser.add_argument("--resize-height", type=int, default=1024, help="Output image height.")
     args = parser.parse_args()
 
     payload = build_image_manifest(
@@ -33,6 +35,8 @@ def main() -> int:
             output_manifest_path=Path(args.output_manifest),
             dataset_name=args.dataset_name,
             workers=args.workers,
+            resize_width=args.resize_width,
+            resize_height=args.resize_height,
         )
     )
     print(json.dumps(payload["summary"], ensure_ascii=False, indent=2))
