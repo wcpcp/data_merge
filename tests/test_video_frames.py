@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 
 from pathlib import Path
+import tempfile
+import shutil
 import sys
 
 
@@ -13,6 +15,7 @@ if str(SRC) not in sys.path:
 
 from data_merge.video_frames import (
     build_frame_manifest_rows,
+    cleanup_partial_outputs,
     compute_uniform_frame_indices,
     compute_uniform_timestamps,
     expected_output_paths,
@@ -20,6 +23,12 @@ from data_merge.video_frames import (
 
 
 class VideoFramesTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = Path(tempfile.mkdtemp(prefix="video_frames_test_"))
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.temp_dir)
+
     def test_compute_uniform_timestamps(self) -> None:
         timestamps = compute_uniform_timestamps(10.0, 5)
         self.assertEqual([round(value, 3) for value in timestamps], [1.0, 3.0, 5.0, 7.0, 9.0])
@@ -57,6 +66,13 @@ class VideoFramesTest(unittest.TestCase):
                 }
             ],
         )
+
+    def test_cleanup_partial_outputs(self) -> None:
+        paths = expected_output_paths(self.temp_dir, 5, ".jpg")
+        for path in paths[:4]:
+            path.write_bytes(b"x")
+        cleanup_partial_outputs(paths)
+        self.assertTrue(all(not path.exists() for path in paths))
 
 
 if __name__ == "__main__":

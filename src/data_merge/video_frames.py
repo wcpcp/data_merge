@@ -101,6 +101,9 @@ def process_video_job(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     existing_paths = expected_output_paths(output_dir, config.frames_per_video, config.image_extension)
+    if any(path.exists() for path in existing_paths) and not all(path.exists() for path in existing_paths):
+        cleanup_partial_outputs(existing_paths)
+
     if not config.overwrite and all(path.exists() for path in existing_paths):
         for path in existing_paths:
             resize_image_in_place(path, config.resize_width, config.resize_height)
@@ -143,6 +146,7 @@ def process_video_job(
         record["backend"] = backend
         return record
     except Exception as exc:
+        cleanup_partial_outputs(existing_paths)
         return {
             "dataset": dataset_name,
             "source_video_path": str(video_path),
@@ -170,7 +174,14 @@ def extract_with_ffmpeg(
     frame_records = []
     for index, timestamp_sec in enumerate(timestamps):
         output_path = output_dir / f"frame_{index:02d}{image_extension}"
-        extract_one_frame_ffmpeg(video_path, output_path, timestamp_sec, resize_width, resize_height)
+        extract_one_frame_ffmpeg_with_fallback(
+            video_path=video_path,
+            output_path=output_path,
+            timestamp_sec=timestamp_sec,
+            duration_sec=duration_sec,
+            resize_width=resize_width,
+            resize_height=resize_height,
+        )
         frame_records.append(
             {
                 "frame_index": index,
@@ -216,18 +227,17 @@ def extract_with_opencv(
         frame_records = []
         for index, frame_index in enumerate(frame_indices):
             output_path = output_dir / f"frame_{index:02d}{image_extension}"
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-            ok, frame = cap.read()
-            if not ok:
+            frame, resolved_frame_index = read_frame_with_fallback(cap, frame_index, total_frames)
+            if frame is None:
                 raise RuntimeError(f"failed to decode frame {frame_index} from {video_path}")
             frame = cv2.resize(frame, (resize_width, resize_height), interpolation=cv2.INTER_AREA)
             if not cv2.imwrite(str(output_path), frame):
                 raise RuntimeError(f"failed to write frame image: {output_path}")
-            timestamp_sec = frame_index / fps if fps > 0 else 0.0
+            timestamp_sec = resolved_frame_index / fps if fps > 0 else 0.0
             frame_records.append(
                 {
                     "frame_index": index,
-                    "source_frame_index": frame_index,
+                    "source_frame_index": resolved_frame_index,
                     "timestamp_sec": round(timestamp_sec, 6),
                     "image_path": str(output_path),
                     "relative_image_path": str(output_path.relative_to(output_dir.parent.parent)),
@@ -430,6 +440,79 @@ def extract_one_frame_ffmpeg(
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+
+
+def extract_one_frame_ffmpeg_with_fallback(
+    *,
+    video_path: Path,
+    output_path: Path,
+    timestamp_sec: float,
+    duration_sec: float,
+    resize_width: int,
+    resize_height: int,
+) -> None:
+    attempts = build_timestamp_attempts(timestamp_sec, duration_sec)
+    last_exc: Optional[Exception] = None
+    for candidate_ts in attempts:
+        try:
+            extract_one_frame_ffmpeg(
+                video_path=video_path,
+                output_path=output_path,
+                timestamp_sec=candidate_ts,
+                resize_width=resize_width,
+                resize_height=resize_height,
+            )
+            if output_path.exists() and output_path.stat().st_size > 0:
+                return
+        except Exception as exc:
+            last_exc = exc
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"failed to extract frame near {timestamp_sec:.6f}s from {video_path}")
+
+
+def build_timestamp_attempts(timestamp_sec: float, duration_sec: float) -> List[float]:
+    floor = 0.0
+    ceiling = max(0.0, duration_sec - 1e-3)
+    offsets = [0.0, -0.05, -0.15, -0.3, -0.6, -1.0]
+    attempts: List[float] = []
+    for offset in offsets:
+        candidate = min(ceiling, max(floor, timestamp_sec + offset))
+        if not attempts or abs(candidate - attempts[-1]) > 1e-6:
+            attempts.append(candidate)
+    return attempts
+
+
+def read_frame_with_fallback(cap: Any, frame_index: int, total_frames: int) -> Tuple[Any, int]:
+    import cv2
+
+    attempts = build_frame_index_attempts(frame_index, total_frames)
+    for candidate in attempts:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, candidate)
+        ok, frame = cap.read()
+        if ok and frame is not None:
+            return frame, candidate
+    return None, frame_index
+
+
+def build_frame_index_attempts(frame_index: int, total_frames: int) -> List[int]:
+    if total_frames <= 1:
+        return [0]
+    attempts: List[int] = []
+    for delta in [0, -1, -2, -3, -5, -8, -12]:
+        candidate = max(0, min(total_frames - 1, frame_index + delta))
+        if candidate not in attempts:
+            attempts.append(candidate)
+    return attempts
+
+
+def cleanup_partial_outputs(paths: Sequence[Path]) -> None:
+    for path in paths:
+        if path.exists():
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
 
 def build_scene_id_from_video_source(source_video_path: str) -> str:
