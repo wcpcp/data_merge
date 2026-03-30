@@ -9,9 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from .image_ops import resize_image_in_place
-
-
 COMMON_VIDEO_EXTENSIONS = {
     ".mp4",
     ".mov",
@@ -103,18 +100,14 @@ def process_video_job(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     existing_paths = expected_output_paths(output_dir, config.frames_per_video, config.image_extension)
-    if any(path.exists() for path in existing_paths) and not all(path.exists() for path in existing_paths):
-        cleanup_partial_outputs(existing_paths)
-
-    if not config.overwrite and all(path.exists() for path in existing_paths):
-        for path in existing_paths:
-            resize_image_in_place(path, config.resize_width, config.resize_height)
+    existing_image_paths = [path for path in existing_paths if path.exists()]
+    if not config.overwrite and len(existing_image_paths) > 3:
         return build_existing_record(
             dataset_name=dataset_name,
             source_root=source_root,
             video_path=video_path,
             output_dir=output_dir,
-            image_paths=existing_paths,
+            image_paths=existing_image_paths,
             frames_per_video=config.frames_per_video,
         )
 
@@ -172,18 +165,27 @@ def extract_with_ffmpeg(
     resize_height: int,
 ) -> Dict[str, Any]:
     duration_sec = probe_duration_ffmpeg(video_path)
-    timestamps = compute_uniform_timestamps(duration_sec, frames_per_video)
+    timestamps = compute_extraction_timestamps(duration_sec, frames_per_video)
     frame_records = []
     for index, timestamp_sec in enumerate(timestamps):
         output_path = output_dir / f"frame_{index:02d}{image_extension}"
-        extract_one_frame_ffmpeg_with_fallback(
-            video_path=video_path,
-            output_path=output_path,
-            timestamp_sec=timestamp_sec,
-            duration_sec=duration_sec,
-            resize_width=resize_width,
-            resize_height=resize_height,
-        )
+        if index == len(timestamps) - 1:
+            extract_last_frame_ffmpeg_with_fallback(
+                video_path=video_path,
+                output_path=output_path,
+                duration_sec=duration_sec,
+                resize_width=resize_width,
+                resize_height=resize_height,
+            )
+        else:
+            extract_one_frame_ffmpeg_with_fallback(
+                video_path=video_path,
+                output_path=output_path,
+                timestamp_sec=timestamp_sec,
+                duration_sec=duration_sec,
+                resize_width=resize_width,
+                resize_height=resize_height,
+            )
         frame_records.append(
             {
                 "frame_index": index,
@@ -224,7 +226,7 @@ def extract_with_opencv(
         fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         duration_sec = total_frames / fps if fps > 0 and total_frames > 0 else 0.0
-        frame_indices = compute_uniform_frame_indices(total_frames, frames_per_video)
+        frame_indices = compute_extraction_frame_indices(total_frames, frames_per_video)
 
         frame_records = []
         for index, frame_index in enumerate(frame_indices):
@@ -386,6 +388,15 @@ def compute_uniform_timestamps(duration_sec: float, frames_per_video: int) -> Li
     return [min(duration_sec - epsilon, duration_sec * ((index + 0.5) / frames_per_video)) for index in range(frames_per_video)]
 
 
+def compute_extraction_timestamps(duration_sec: float, frames_per_video: int) -> List[float]:
+    timestamps = compute_uniform_timestamps(duration_sec, frames_per_video)
+    if not timestamps or duration_sec <= 0:
+        return timestamps
+    epsilon = min(1e-3, duration_sec / max(frames_per_video * 1000, 1))
+    timestamps[-1] = max(0.0, duration_sec - epsilon)
+    return timestamps
+
+
 def compute_uniform_frame_indices(total_frames: int, frames_per_video: int) -> List[int]:
     if frames_per_video <= 0:
         return []
@@ -395,6 +406,14 @@ def compute_uniform_frame_indices(total_frames: int, frames_per_video: int) -> L
     for index in range(frames_per_video):
         raw = total_frames * ((index + 0.5) / frames_per_video) - 0.5
         indices.append(max(0, min(total_frames - 1, int(round(raw)))))
+    return indices
+
+
+def compute_extraction_frame_indices(total_frames: int, frames_per_video: int) -> List[int]:
+    indices = compute_uniform_frame_indices(total_frames, frames_per_video)
+    if not indices or total_frames <= 0:
+        return indices
+    indices[-1] = total_frames - 1
     return indices
 
 
@@ -489,6 +508,34 @@ def extract_one_frame_ffmpeg_with_fallback(
     raise RuntimeError(f"failed to extract frame near {timestamp_sec:.6f}s from {video_path}")
 
 
+def extract_last_frame_ffmpeg_with_fallback(
+    *,
+    video_path: Path,
+    output_path: Path,
+    duration_sec: float,
+    resize_width: int,
+    resize_height: int,
+) -> None:
+    attempts = build_tail_timestamp_attempts(duration_sec)
+    last_exc: Optional[Exception] = None
+    for candidate_ts in attempts:
+        try:
+            extract_one_frame_ffmpeg(
+                video_path=video_path,
+                output_path=output_path,
+                timestamp_sec=candidate_ts,
+                resize_width=resize_width,
+                resize_height=resize_height,
+            )
+            if output_path.exists() and output_path.stat().st_size > 0:
+                return
+        except Exception as exc:
+            last_exc = exc
+    if last_exc is not None:
+        raise RuntimeError(f"failed to extract last frame from {video_path}") from last_exc
+    raise RuntimeError(f"failed to extract last frame from {video_path}")
+
+
 def build_timestamp_attempts(timestamp_sec: float, duration_sec: float) -> List[float]:
     floor = 0.0
     ceiling = max(0.0, duration_sec - 1e-3)
@@ -496,6 +543,20 @@ def build_timestamp_attempts(timestamp_sec: float, duration_sec: float) -> List[
     attempts: List[float] = []
     for offset in offsets:
         candidate = min(ceiling, max(floor, timestamp_sec + offset))
+        if not attempts or abs(candidate - attempts[-1]) > 1e-6:
+            attempts.append(candidate)
+    return attempts
+
+
+def build_tail_timestamp_attempts(duration_sec: float) -> List[float]:
+    if duration_sec <= 0:
+        return [0.0]
+    floor = 0.0
+    ceiling = max(0.0, duration_sec - 1e-3)
+    offsets = [0.0, -0.02, -0.05, -0.1, -0.2, -0.35, -0.5, -0.75, -1.0, -1.5, -2.0, -3.0]
+    attempts: List[float] = []
+    for offset in offsets:
+        candidate = min(ceiling, max(floor, ceiling + offset))
         if not attempts or abs(candidate - attempts[-1]) > 1e-6:
             attempts.append(candidate)
     return attempts
