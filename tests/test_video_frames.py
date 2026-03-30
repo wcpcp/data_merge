@@ -15,11 +15,13 @@ if str(SRC) not in sys.path:
 
 from data_merge.video_frames import (
     build_error_rows,
+    build_failed_record,
     build_frame_manifest_rows,
     build_tail_timestamp_attempts,
     cleanup_partial_outputs,
     compute_extraction_frame_indices,
     compute_extraction_timestamps,
+    compute_safe_tail_timestamp,
     compute_uniform_frame_indices,
     compute_uniform_timestamps,
     expected_output_paths,
@@ -40,7 +42,7 @@ class VideoFramesTest(unittest.TestCase):
     def test_compute_extraction_timestamps_uses_video_tail_for_last_frame(self) -> None:
         timestamps = compute_extraction_timestamps(10.0, 5)
         self.assertEqual([round(value, 3) for value in timestamps[:-1]], [1.0, 3.0, 5.0, 7.0])
-        self.assertGreater(timestamps[-1], 9.99)
+        self.assertAlmostEqual(timestamps[-1], 8.5, places=3)
 
     def test_compute_uniform_frame_indices(self) -> None:
         indices = compute_uniform_frame_indices(100, 5)
@@ -48,7 +50,7 @@ class VideoFramesTest(unittest.TestCase):
 
     def test_compute_extraction_frame_indices_uses_last_video_frame(self) -> None:
         indices = compute_extraction_frame_indices(100, 5)
-        self.assertEqual(indices, [10, 30, 50, 70, 99])
+        self.assertEqual(indices, [10, 30, 50, 70, 84])
 
     def test_expected_output_paths(self) -> None:
         paths = expected_output_paths(Path("/tmp/demo"), 3, ".jpg")
@@ -59,8 +61,11 @@ class VideoFramesTest(unittest.TestCase):
 
     def test_build_tail_timestamp_attempts_moves_back_from_video_end(self) -> None:
         attempts = build_tail_timestamp_attempts(10.0)
-        self.assertAlmostEqual(attempts[0], 9.999, places=3)
-        self.assertIn(8.999, [round(value, 3) for value in attempts])
+        self.assertAlmostEqual(attempts[0], 8.5, places=3)
+        self.assertIn(7.5, [round(value, 3) for value in attempts])
+
+    def test_compute_safe_tail_timestamp(self) -> None:
+        self.assertAlmostEqual(compute_safe_tail_timestamp(10.0), 8.5, places=3)
 
     def test_build_frame_manifest_rows_uses_short_ids(self) -> None:
         rows = build_frame_manifest_rows(
@@ -99,7 +104,8 @@ class VideoFramesTest(unittest.TestCase):
                     "dataset": "Sphere360",
                     "source_video_path": "/workspace/demo/a.mp4",
                     "relative_video_path": "a.mp4",
-                    "status": "error",
+                    "status": "partial_error",
+                    "frame_count_extracted": 4,
                     "error": "ffprobe failed",
                 },
                 {
@@ -118,10 +124,29 @@ class VideoFramesTest(unittest.TestCase):
                     "dataset": "Sphere360",
                     "source_video_path": "/workspace/demo/a.mp4",
                     "relative_video_path": "a.mp4",
+                    "status": "partial_error",
+                    "frame_count_extracted": "4",
                     "error": "ffprobe failed",
                 }
             ],
         )
+
+    def test_build_failed_record_preserves_partial_frames(self) -> None:
+        image_paths = expected_output_paths(self.temp_dir, 5, ".jpg")[:3]
+        for path in image_paths:
+            path.write_bytes(b"x")
+        record = build_failed_record(
+            dataset_name="Sphere360",
+            source_root=Path("/workspace/source"),
+            video_path=Path("/workspace/source/demo.mp4"),
+            output_dir=self.temp_dir,
+            image_paths=image_paths,
+            frames_per_video=5,
+            error="failed to extract tail frame",
+        )
+        self.assertEqual(record["status"], "partial_error")
+        self.assertEqual(record["frame_count_extracted"], 3)
+        self.assertEqual(len(record["frames"]), 3)
 
 
 if __name__ == "__main__":

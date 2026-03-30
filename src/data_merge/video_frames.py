@@ -141,16 +141,16 @@ def process_video_job(
         record["backend"] = backend
         return record
     except Exception as exc:
-        cleanup_partial_outputs(existing_paths)
-        return {
-            "dataset": dataset_name,
-            "source_video_path": str(video_path),
-            "relative_video_path": str(relative_video_path),
-            "status": "error",
-            "error": str(exc),
-            "frames_per_video_requested": config.frames_per_video,
-            "frames": [],
-        }
+        partial_image_paths = [path for path in existing_paths if path.exists()]
+        return build_failed_record(
+            dataset_name=dataset_name,
+            source_root=source_root,
+            video_path=video_path,
+            output_dir=output_dir,
+            image_paths=partial_image_paths,
+            frames_per_video=config.frames_per_video,
+            error=str(exc),
+        )
 
 
 def extract_with_ffmpeg(
@@ -170,7 +170,7 @@ def extract_with_ffmpeg(
     for index, timestamp_sec in enumerate(timestamps):
         output_path = output_dir / f"frame_{index:02d}{image_extension}"
         if index == len(timestamps) - 1:
-            extract_last_frame_ffmpeg_with_fallback(
+            resolved_timestamp_sec = extract_last_frame_ffmpeg_with_fallback(
                 video_path=video_path,
                 output_path=output_path,
                 duration_sec=duration_sec,
@@ -178,7 +178,7 @@ def extract_with_ffmpeg(
                 resize_height=resize_height,
             )
         else:
-            extract_one_frame_ffmpeg_with_fallback(
+            resolved_timestamp_sec = extract_one_frame_ffmpeg_with_fallback(
                 video_path=video_path,
                 output_path=output_path,
                 timestamp_sec=timestamp_sec,
@@ -189,7 +189,7 @@ def extract_with_ffmpeg(
         frame_records.append(
             {
                 "frame_index": index,
-                "timestamp_sec": round(timestamp_sec, 6),
+                "timestamp_sec": round(resolved_timestamp_sec, 6),
                 "image_path": str(output_path),
                 "relative_image_path": str(output_path.relative_to(output_dir.parent.parent)),
             }
@@ -313,6 +313,40 @@ def build_existing_record(
     }
 
 
+def build_failed_record(
+    *,
+    dataset_name: str,
+    source_root: Path,
+    video_path: Path,
+    output_dir: Path,
+    image_paths: List[Path],
+    frames_per_video: int,
+    error: str,
+) -> Dict[str, Any]:
+    relative_video_path = video_path.relative_to(source_root)
+    status = "partial_error" if image_paths else "error"
+    return {
+        "dataset": dataset_name,
+        "source_video_path": str(video_path),
+        "relative_video_path": str(relative_video_path),
+        "output_dir": str(output_dir),
+        "duration_sec": None,
+        "status": status,
+        "error": error,
+        "frames_per_video_requested": frames_per_video,
+        "frame_count_extracted": len(image_paths),
+        "frames": [
+            {
+                "frame_index": index,
+                "timestamp_sec": None,
+                "image_path": str(path),
+                "relative_image_path": str(path.relative_to(output_dir.parent.parent)),
+            }
+            for index, path in enumerate(sorted(image_paths)[:frames_per_video])
+        ],
+    }
+
+
 def build_summary(records: Sequence[Dict[str, Any]], config: VideoFrameExtractionConfig) -> Dict[str, Any]:
     status_counts: Dict[str, int] = {}
     dataset_counts: Dict[str, int] = {}
@@ -362,13 +396,16 @@ def build_frame_manifest_rows(records: Sequence[Dict[str, Any]]) -> List[Dict[st
 def build_error_rows(records: Sequence[Dict[str, Any]]) -> List[Dict[str, str]]:
     rows: List[Dict[str, str]] = []
     for record in records:
-        if str(record.get("status", "")) != "error":
+        status = str(record.get("status", ""))
+        if status not in {"error", "partial_error"}:
             continue
         rows.append(
             {
                 "dataset": str(record.get("dataset", "")),
                 "source_video_path": str(record.get("source_video_path", "")),
                 "relative_video_path": str(record.get("relative_video_path", "")),
+                "status": status,
+                "frame_count_extracted": str(record.get("frame_count_extracted", 0)),
                 "error": str(record.get("error", "")),
             }
         )
@@ -392,8 +429,7 @@ def compute_extraction_timestamps(duration_sec: float, frames_per_video: int) ->
     timestamps = compute_uniform_timestamps(duration_sec, frames_per_video)
     if not timestamps or duration_sec <= 0:
         return timestamps
-    epsilon = min(1e-3, duration_sec / max(frames_per_video * 1000, 1))
-    timestamps[-1] = max(0.0, duration_sec - epsilon)
+    timestamps[-1] = compute_safe_tail_timestamp(duration_sec)
     return timestamps
 
 
@@ -413,8 +449,16 @@ def compute_extraction_frame_indices(total_frames: int, frames_per_video: int) -
     indices = compute_uniform_frame_indices(total_frames, frames_per_video)
     if not indices or total_frames <= 0:
         return indices
-    indices[-1] = total_frames - 1
+    indices[-1] = max(0, min(total_frames - 1, int(round((total_frames - 1) * 0.85))))
     return indices
+
+
+def compute_safe_tail_timestamp(duration_sec: float) -> float:
+    if duration_sec <= 0:
+        return 0.0
+    epsilon = min(1e-3, duration_sec / 1000.0)
+    safe_tail = duration_sec * 0.85
+    return min(duration_sec - epsilon, max(0.0, safe_tail))
 
 
 def detect_backend() -> Optional[str]:
@@ -487,7 +531,7 @@ def extract_one_frame_ffmpeg_with_fallback(
     duration_sec: float,
     resize_width: int,
     resize_height: int,
-) -> None:
+) -> float:
     attempts = build_timestamp_attempts(timestamp_sec, duration_sec)
     last_exc: Optional[Exception] = None
     for candidate_ts in attempts:
@@ -500,7 +544,7 @@ def extract_one_frame_ffmpeg_with_fallback(
                 resize_height=resize_height,
             )
             if output_path.exists() and output_path.stat().st_size > 0:
-                return
+                return candidate_ts
         except Exception as exc:
             last_exc = exc
     if last_exc is not None:
@@ -515,7 +559,7 @@ def extract_last_frame_ffmpeg_with_fallback(
     duration_sec: float,
     resize_width: int,
     resize_height: int,
-) -> None:
+) -> float:
     attempts = build_tail_timestamp_attempts(duration_sec)
     last_exc: Optional[Exception] = None
     for candidate_ts in attempts:
@@ -528,12 +572,12 @@ def extract_last_frame_ffmpeg_with_fallback(
                 resize_height=resize_height,
             )
             if output_path.exists() and output_path.stat().st_size > 0:
-                return
+                return candidate_ts
         except Exception as exc:
             last_exc = exc
     if last_exc is not None:
-        raise RuntimeError(f"failed to extract last frame from {video_path}") from last_exc
-    raise RuntimeError(f"failed to extract last frame from {video_path}")
+        raise RuntimeError(f"failed to extract tail frame from {video_path}") from last_exc
+    raise RuntimeError(f"failed to extract tail frame from {video_path}")
 
 
 def build_timestamp_attempts(timestamp_sec: float, duration_sec: float) -> List[float]:
@@ -553,10 +597,11 @@ def build_tail_timestamp_attempts(duration_sec: float) -> List[float]:
         return [0.0]
     floor = 0.0
     ceiling = max(0.0, duration_sec - 1e-3)
-    offsets = [0.0, -0.02, -0.05, -0.1, -0.2, -0.35, -0.5, -0.75, -1.0, -1.5, -2.0, -3.0]
+    base = compute_safe_tail_timestamp(duration_sec)
+    offsets = [0.0, -0.3, -0.6, -1.0, -1.5, -2.0, -3.0, -4.0]
     attempts: List[float] = []
     for offset in offsets:
-        candidate = min(ceiling, max(floor, ceiling + offset))
+        candidate = min(ceiling, max(floor, base + offset))
         if not attempts or abs(candidate - attempts[-1]) > 1e-6:
             attempts.append(candidate)
     return attempts
