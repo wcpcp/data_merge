@@ -66,11 +66,13 @@ def extract_uniform_video_frames(config: VideoFrameExtractionConfig) -> Dict[str
 
     summary = build_summary(records, config)
     manifest_rows = build_frame_manifest_rows(records)
+    error_rows = build_error_rows(records)
     with config.output_manifest_path.open("w", encoding="utf-8") as handle:
         json.dump(manifest_rows, handle, ensure_ascii=False, indent=2)
     return {
         "summary": summary,
         "records": manifest_rows,
+        "errors": error_rows,
     }
 
 
@@ -352,6 +354,22 @@ def build_frame_manifest_rows(records: Sequence[Dict[str, Any]]) -> List[Dict[st
                     "viewpoint_id": viewpoint_id,
                 }
             )
+    return rows
+
+
+def build_error_rows(records: Sequence[Dict[str, Any]]) -> List[Dict[str, str]]:
+    rows: List[Dict[str, str]] = []
+    for record in records:
+        if str(record.get("status", "")) != "error":
+            continue
+        rows.append(
+            {
+                "dataset": str(record.get("dataset", "")),
+                "source_video_path": str(record.get("source_video_path", "")),
+                "relative_video_path": str(record.get("relative_video_path", "")),
+                "error": str(record.get("error", "")),
+            }
+        )
     return rows
 
 

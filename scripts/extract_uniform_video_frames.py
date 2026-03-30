@@ -32,6 +32,12 @@ def main() -> int:
     parser.add_argument("--resize-width", type=int, default=2048, help="Output image width.")
     parser.add_argument("--resize-height", type=int, default=1024, help="Output image height.")
     parser.add_argument("--overwrite", action="store_true", help="Re-extract frames even if outputs already exist.")
+    parser.add_argument(
+        "--show-errors-limit",
+        type=int,
+        default=0,
+        help="Optionally print the first N error records after the summary.",
+    )
     args = parser.parse_args()
 
     config = VideoFrameExtractionConfig(
@@ -49,6 +55,9 @@ def main() -> int:
     )
     payload = extract_uniform_video_frames(config)
     print(json.dumps(payload["summary"], ensure_ascii=False, indent=2))
+    if args.show_errors_limit > 0 and payload["errors"]:
+        error_rows = payload["errors"][: args.show_errors_limit]
+        print(json.dumps({"error_samples": error_rows}, ensure_ascii=False, indent=2))
     return 0
 
 

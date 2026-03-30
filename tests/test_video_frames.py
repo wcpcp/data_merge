@@ -14,6 +14,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from data_merge.video_frames import (
+    build_error_rows,
     build_frame_manifest_rows,
     cleanup_partial_outputs,
     compute_uniform_frame_indices,
@@ -73,6 +74,37 @@ class VideoFramesTest(unittest.TestCase):
             path.write_bytes(b"x")
         cleanup_partial_outputs(paths)
         self.assertTrue(all(not path.exists() for path in paths))
+
+    def test_build_error_rows(self) -> None:
+        rows = build_error_rows(
+            [
+                {
+                    "dataset": "Sphere360",
+                    "source_video_path": "/workspace/demo/a.mp4",
+                    "relative_video_path": "a.mp4",
+                    "status": "error",
+                    "error": "ffprobe failed",
+                },
+                {
+                    "dataset": "panowan",
+                    "source_video_path": "/workspace/demo/b.mp4",
+                    "relative_video_path": "b.mp4",
+                    "status": "ok",
+                    "error": "",
+                },
+            ]
+        )
+        self.assertEqual(
+            rows,
+            [
+                {
+                    "dataset": "Sphere360",
+                    "source_video_path": "/workspace/demo/a.mp4",
+                    "relative_video_path": "a.mp4",
+                    "error": "ffprobe failed",
+                }
+            ],
+        )
 
 
 if __name__ == "__main__":
