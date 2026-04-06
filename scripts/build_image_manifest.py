@@ -27,6 +27,7 @@ def main() -> int:
     parser.add_argument("--workers", type=int, default=16, help="Parallel worker count.")
     parser.add_argument("--resize-width", type=int, default=2048, help="Output image width.")
     parser.add_argument("--resize-height", type=int, default=1024, help="Output image height.")
+    parser.add_argument("--progress-every", type=int, default=200, help="Print progress every N processed images.")
     args = parser.parse_args()
 
     payload = build_image_manifest(
@@ -37,6 +38,7 @@ def main() -> int:
             workers=args.workers,
             resize_width=args.resize_width,
             resize_height=args.resize_height,
+            progress_every=args.progress_every,
         )
     )
     print(json.dumps(payload["summary"], ensure_ascii=False, indent=2))

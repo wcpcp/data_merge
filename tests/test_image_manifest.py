@@ -48,6 +48,7 @@ class ImageManifestTest(unittest.TestCase):
                 output_manifest_path=dataset_root / "image_manifest.json",
                 dataset_name="real_360_test",
                 workers=2,
+                progress_every=1,
             )
         )
 
@@ -95,6 +96,7 @@ class ImageManifestTest(unittest.TestCase):
                 output_manifest_path=dataset_root / "image_manifest.json",
                 dataset_name="panox_test",
                 workers=2,
+                progress_every=1,
             )
         )
 

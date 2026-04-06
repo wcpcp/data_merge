@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -32,6 +33,7 @@ class ImageManifestConfig:
     workers: int = min(16, (os.cpu_count() or 4))
     resize_width: int = 2048
     resize_height: int = 1024
+    progress_every: int = 200
 
 
 def build_image_manifest(config: ImageManifestConfig) -> Dict[str, Any]:
@@ -45,7 +47,13 @@ def build_image_manifest(config: ImageManifestConfig) -> Dict[str, Any]:
         path for path in image_root.rglob("*") if path.is_file() and path.suffix.lower() in COMMON_IMAGE_EXTENSIONS
     )
 
-    records = parallel_map(
+    print(
+        f"[image_manifest] dataset={config.dataset_name} image_root={image_root} "
+        f"images={len(image_paths)} metadata_rows={len(metadata_index)} workers={config.workers}",
+        flush=True,
+    )
+
+    records = parallel_map_with_progress(
         image_paths,
         lambda path: build_image_record(
             path=path,
@@ -57,6 +65,8 @@ def build_image_manifest(config: ImageManifestConfig) -> Dict[str, Any]:
             resize_height=config.resize_height,
         ),
         workers=config.workers,
+        progress_every=config.progress_every,
+        progress_label=f"image_manifest:{config.dataset_name}",
     )
 
     summary = build_image_summary(
@@ -252,3 +262,51 @@ def parallel_map(items: Sequence[Any], fn: Any, workers: int) -> List[Any]:
         return [fn(item) for item in items]
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         return list(executor.map(fn, items))
+
+
+def parallel_map_with_progress(
+    items: Sequence[Any],
+    fn: Any,
+    workers: int,
+    progress_every: int,
+    progress_label: str,
+) -> List[Any]:
+    if not items:
+        return []
+
+    worker_count = max(1, min(workers, len(items)))
+    progress_step = max(1, progress_every)
+    total = len(items)
+    started_at = time.time()
+
+    if worker_count == 1:
+        records: List[Any] = []
+        for index, item in enumerate(items, start=1):
+            records.append(fn(item))
+            if index % progress_step == 0 or index == total:
+                elapsed = time.time() - started_at
+                rate = index / elapsed if elapsed > 0 else 0.0
+                print(
+                    f"[{progress_label}] {index}/{total} done "
+                    f"({index / total:.1%}, {rate:.2f} img/s, elapsed={elapsed:.1f}s)",
+                    flush=True,
+                )
+        return records
+
+    results: List[Any] = [None] * total
+    completed = 0
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_to_index = {executor.submit(fn, item): index for index, item in enumerate(items)}
+        for future in as_completed(future_to_index):
+            index = future_to_index[future]
+            results[index] = future.result()
+            completed += 1
+            if completed % progress_step == 0 or completed == total:
+                elapsed = time.time() - started_at
+                rate = completed / elapsed if elapsed > 0 else 0.0
+                print(
+                    f"[{progress_label}] {completed}/{total} done "
+                    f"({completed / total:.1%}, {rate:.2f} img/s, elapsed={elapsed:.1f}s)",
+                    flush=True,
+                )
+    return results

@@ -190,6 +190,7 @@ python3 /Users/wcp/code/erp_data_pipeline/data_merge/scripts/build_image_manifes
   --dataset-name real_360_test \
   --resize-width 2048 \
   --resize-height 1024 \
+  --progress-every 200 \
   --workers 16
 ```
 
@@ -199,6 +200,7 @@ This script:
 - scans all common image files
 - resizes every image in place to `2048x1024`
 - tries to match each image filename back to either `search_results.jsonl` or `metadata.jsonl`
+- prints periodic progress while resizing and indexing large image sets
 - writes a simple JSON list with one record per image
 
 For datasets like `panox/`, the matcher will also read `metadata.jsonl` rows such as:

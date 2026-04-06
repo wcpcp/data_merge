@@ -6,6 +6,9 @@ import shutil
 import subprocess
 
 
+_IMAGE_BACKEND: Optional[str] = None
+
+
 def resize_image_in_place(path: Path, width: int, height: int) -> None:
     backend = detect_image_backend()
     if backend == "pillow":
@@ -21,20 +24,26 @@ def resize_image_in_place(path: Path, width: int, height: int) -> None:
 
 
 def detect_image_backend() -> Optional[str]:
+    global _IMAGE_BACKEND
+    if _IMAGE_BACKEND is not None:
+        return _IMAGE_BACKEND
     try:
         from PIL import Image  # noqa: F401
 
-        return "pillow"
+        _IMAGE_BACKEND = "pillow"
+        return _IMAGE_BACKEND
     except Exception:
         pass
     try:
         import cv2  # noqa: F401
 
-        return "opencv"
+        _IMAGE_BACKEND = "opencv"
+        return _IMAGE_BACKEND
     except Exception:
         pass
     if shutil.which("ffmpeg"):
-        return "ffmpeg"
+        _IMAGE_BACKEND = "ffmpeg"
+        return _IMAGE_BACKEND
     return None
 
 
