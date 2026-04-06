@@ -108,13 +108,23 @@ def resolve_image_root(dataset_root: Path) -> Path:
 
 
 def discover_image_paths(image_root: Path) -> Iterator[Path]:
-    for root, dirnames, filenames in os.walk(image_root):
-        dirnames.sort()
-        root_path = Path(root)
-        for filename in sorted(filenames):
-            path = root_path / filename
-            if path.suffix.lower() in COMMON_IMAGE_EXTENSIONS and path.is_file():
-                yield path
+    stack: List[Path] = [image_root]
+    while stack:
+        current = stack.pop()
+        subdirs: List[Path] = []
+        with os.scandir(current) as iterator:
+            for entry in iterator:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        subdirs.append(Path(entry.path))
+                    elif entry.is_file(follow_symlinks=False):
+                        path = Path(entry.path)
+                        if path.suffix.lower() in COMMON_IMAGE_EXTENSIONS:
+                            yield path
+                except OSError:
+                    continue
+        for subdir in sorted(subdirs, reverse=True):
+            stack.append(subdir)
 
 
 def load_metadata_index(dataset_root: Path) -> Dict[str, Dict[str, Any]]:
@@ -445,6 +455,10 @@ def parallel_build_image_records_streaming(
         pending: Dict[Any, int] = {}
         while len(pending) < max_pending and submit_next(executor, pending):
             pass
+        print(
+            f"[{progress_label}] initial_submitted={len(pending)} discovered={discovered} inflight={len(pending)}",
+            flush=True,
+        )
 
         while pending:
             done, _ = wait(pending.keys(), return_when=FIRST_COMPLETED)

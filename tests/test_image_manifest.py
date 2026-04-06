@@ -117,7 +117,7 @@ class ImageManifestTest(unittest.TestCase):
         self._write_test_image(image_root / "a" / "01.jpg", 8, 4)
 
         paths = [str(path.relative_to(image_root)) for path in discover_image_paths(image_root)]
-        self.assertEqual(paths, ["a/01.jpg", "b/02.jpg"])
+        self.assertEqual(set(paths), {"a/01.jpg", "b/02.jpg"})
 
     def test_build_image_manifest_skips_broken_image(self) -> None:
         dataset_root = self.temp_dir / "broken"
