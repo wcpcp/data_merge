@@ -27,7 +27,6 @@ STEM_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _WORKER_IMAGE_ROOT: Optional[Path] = None
 _WORKER_DATASET_ROOT: Optional[Path] = None
 _WORKER_DATASET_NAME: str = ""
-_WORKER_METADATA_INDEX: Dict[str, Dict[str, Any]] = {}
 _WORKER_RESIZE_WIDTH: int = 2048
 _WORKER_RESIZE_HEIGHT: int = 1024
 
@@ -62,14 +61,17 @@ def build_image_manifest(config: ImageManifestConfig) -> Dict[str, Any]:
         image_root=image_root,
         dataset_root=dataset_root,
         dataset_name=config.dataset_name,
-        metadata_index=metadata_index,
         resize_width=config.resize_width,
         resize_height=config.resize_height,
         workers=config.workers,
         progress_every=config.progress_every,
         progress_label=f"image_manifest:{config.dataset_name}",
     )
-    records = [record for record in raw_records if str(record.get("status", "ok")) != "error"]
+    records = [
+        attach_metadata_to_record(record, metadata_index)
+        for record in raw_records
+        if str(record.get("status", "ok")) != "error"
+    ]
     error_records = [record for record in raw_records if str(record.get("status", "")) == "error"]
 
     summary = build_image_summary(
@@ -141,15 +143,12 @@ def build_image_record(
     image_root: Path,
     dataset_root: Path,
     dataset_name: str,
-    metadata_index: Dict[str, Dict[str, Any]],
     resize_width: int,
     resize_height: int,
 ) -> Dict[str, Any]:
     resize_image_in_place(path, resize_width, resize_height)
     stat = path.stat()
     relative_image_path = path.relative_to(image_root)
-    stem_key = path.stem
-    matched = metadata_index.get(stem_key)
 
     record: Dict[str, Any] = {
         "dataset": dataset_name,
@@ -163,41 +162,48 @@ def build_image_record(
         "viewpoint_id": path.stem,
         "suffix": path.suffix.lower(),
         "file_size_bytes": stat.st_size,
-        "metadata_match_found": matched is not None,
+        "metadata_match_found": False,
     }
+    return record
+
+def attach_metadata_to_record(record: Dict[str, Any], metadata_index: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    enriched = dict(record)
+    stem_key = str(enriched.get("stem", ""))
+    matched = metadata_index.get(stem_key)
+    enriched["metadata_match_found"] = matched is not None
 
     if matched is not None:
-        record["source"] = matched.get("source")
-        record["source_id"] = matched.get("source_id")
-        record["id"] = matched.get("id")
-        record["provider"] = matched.get("provider")
-        record["title"] = matched.get("title")
-        record["caption"] = matched.get("caption")
-        record["creator"] = matched.get("creator")
-        record["license"] = matched.get("license")
-        record["license_url"] = matched.get("license_url")
-        record["landing_url"] = matched.get("landing_url")
-        record["file_url"] = matched.get("file_url")
-        record["width"] = matched.get("width")
-        record["height"] = matched.get("height")
-        record["aspect_ratio"] = matched.get("aspect_ratio")
-        record["quality_bucket"] = matched.get("quality_bucket")
-        record["is_360"] = matched.get("is_360")
-        record["query"] = matched.get("query")
-        record["asset_url"] = matched.get("asset_url")
-        record["collection"] = matched.get("collection")
-        record["datetime"] = matched.get("datetime")
-        record["asset_key"] = matched.get("asset_key")
-        record["erp_reason"] = matched.get("erp_reason")
-        record["quality_grade"] = matched.get("quality_grade")
-        record["quality_score_value"] = matched.get("quality_score_value")
-        record["lon"] = matched.get("lon")
-        record["lat"] = matched.get("lat")
-        record["image_name"] = matched.get("image_name")
-        record["local_path"] = matched.get("local_path")
-        record["source_metadata_csv"] = matched.get("source_metadata_csv")
-        record["source_region_dir"] = matched.get("source_region_dir")
-    return record
+        enriched["source"] = matched.get("source")
+        enriched["source_id"] = matched.get("source_id")
+        enriched["id"] = matched.get("id")
+        enriched["provider"] = matched.get("provider")
+        enriched["title"] = matched.get("title")
+        enriched["caption"] = matched.get("caption")
+        enriched["creator"] = matched.get("creator")
+        enriched["license"] = matched.get("license")
+        enriched["license_url"] = matched.get("license_url")
+        enriched["landing_url"] = matched.get("landing_url")
+        enriched["file_url"] = matched.get("file_url")
+        enriched["width"] = matched.get("width")
+        enriched["height"] = matched.get("height")
+        enriched["aspect_ratio"] = matched.get("aspect_ratio")
+        enriched["quality_bucket"] = matched.get("quality_bucket")
+        enriched["is_360"] = matched.get("is_360")
+        enriched["query"] = matched.get("query")
+        enriched["asset_url"] = matched.get("asset_url")
+        enriched["collection"] = matched.get("collection")
+        enriched["datetime"] = matched.get("datetime")
+        enriched["asset_key"] = matched.get("asset_key")
+        enriched["erp_reason"] = matched.get("erp_reason")
+        enriched["quality_grade"] = matched.get("quality_grade")
+        enriched["quality_score_value"] = matched.get("quality_score_value")
+        enriched["lon"] = matched.get("lon")
+        enriched["lat"] = matched.get("lat")
+        enriched["image_name"] = matched.get("image_name")
+        enriched["local_path"] = matched.get("local_path")
+        enriched["source_metadata_csv"] = matched.get("source_metadata_csv")
+        enriched["source_region_dir"] = matched.get("source_region_dir")
+    return enriched
 
 
 def build_image_record_safe(
@@ -206,7 +212,6 @@ def build_image_record_safe(
     image_root: Path,
     dataset_root: Path,
     dataset_name: str,
-    metadata_index: Dict[str, Dict[str, Any]],
     resize_width: int,
     resize_height: int,
 ) -> Dict[str, Any]:
@@ -216,7 +221,6 @@ def build_image_record_safe(
             image_root=image_root,
             dataset_root=dataset_root,
             dataset_name=dataset_name,
-            metadata_index=metadata_index,
             resize_width=resize_width,
             resize_height=resize_height,
         )
@@ -318,21 +322,18 @@ def init_image_record_worker(
     image_root: str,
     dataset_root: str,
     dataset_name: str,
-    metadata_index: Dict[str, Dict[str, Any]],
     resize_width: int,
     resize_height: int,
 ) -> None:
     global _WORKER_IMAGE_ROOT
     global _WORKER_DATASET_ROOT
     global _WORKER_DATASET_NAME
-    global _WORKER_METADATA_INDEX
     global _WORKER_RESIZE_WIDTH
     global _WORKER_RESIZE_HEIGHT
 
     _WORKER_IMAGE_ROOT = Path(image_root)
     _WORKER_DATASET_ROOT = Path(dataset_root)
     _WORKER_DATASET_NAME = dataset_name
-    _WORKER_METADATA_INDEX = metadata_index
     _WORKER_RESIZE_WIDTH = resize_width
     _WORKER_RESIZE_HEIGHT = resize_height
 
@@ -345,7 +346,6 @@ def build_image_record_worker(path_str: str) -> Dict[str, Any]:
         image_root=_WORKER_IMAGE_ROOT,
         dataset_root=_WORKER_DATASET_ROOT,
         dataset_name=_WORKER_DATASET_NAME,
-        metadata_index=_WORKER_METADATA_INDEX,
         resize_width=_WORKER_RESIZE_WIDTH,
         resize_height=_WORKER_RESIZE_HEIGHT,
     )
@@ -367,7 +367,6 @@ def parallel_build_image_records_streaming(
     image_root: Path,
     dataset_root: Path,
     dataset_name: str,
-    metadata_index: Dict[str, Dict[str, Any]],
     resize_width: int,
     resize_height: int,
     workers: int,
@@ -387,7 +386,6 @@ def parallel_build_image_records_streaming(
                     image_root=image_root,
                     dataset_root=dataset_root,
                     dataset_name=dataset_name,
-                    metadata_index=metadata_index,
                     resize_width=resize_width,
                     resize_height=resize_height,
                 )
@@ -440,7 +438,6 @@ def parallel_build_image_records_streaming(
             str(image_root),
             str(dataset_root),
             dataset_name,
-            metadata_index,
             resize_width,
             resize_height,
         ),
