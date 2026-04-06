@@ -13,7 +13,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from data_merge.image_manifest import ImageManifestConfig, build_image_manifest, stable_stem
+from data_merge.image_manifest import ImageManifestConfig, build_image_manifest, discover_image_paths, stable_stem
 
 
 class ImageManifestTest(unittest.TestCase):
@@ -107,6 +107,17 @@ class ImageManifestTest(unittest.TestCase):
         self.assertEqual(image_record["source"], row["asset_url"])
         self.assertEqual(image_record["scene_id"], Path(image_name).stem)
         self.assertEqual(image_record["viewpoint_id"], Path(image_name).stem)
+
+    def test_discover_image_paths_streams_in_sorted_order(self) -> None:
+        dataset_root = self.temp_dir / "streaming"
+        image_root = dataset_root / "images"
+        (image_root / "b").mkdir(parents=True)
+        (image_root / "a").mkdir(parents=True)
+        self._write_test_image(image_root / "b" / "02.jpg", 8, 4)
+        self._write_test_image(image_root / "a" / "01.jpg", 8, 4)
+
+        paths = [str(path.relative_to(image_root)) for path in discover_image_paths(image_root)]
+        self.assertEqual(paths, ["a/01.jpg", "b/02.jpg"])
 
     def _write_test_image(self, path: Path, width: int, height: int) -> None:
         try:

@@ -4,10 +4,10 @@ import json
 import os
 import re
 import time
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, wait, FIRST_COMPLETED
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 from .image_ops import resize_image_in_place
 
@@ -50,18 +50,15 @@ def build_image_manifest(config: ImageManifestConfig) -> Dict[str, Any]:
 
     image_root = resolve_image_root(dataset_root)
     metadata_index = load_metadata_index(dataset_root)
-    image_paths = sorted(
-        path for path in image_root.rglob("*") if path.is_file() and path.suffix.lower() in COMMON_IMAGE_EXTENSIONS
-    )
 
     print(
         f"[image_manifest] dataset={config.dataset_name} image_root={image_root} "
-        f"images={len(image_paths)} metadata_rows={len(metadata_index)} workers={config.workers}",
+        f"images=streaming metadata_rows={len(metadata_index)} workers={config.workers}",
         flush=True,
     )
 
-    records = parallel_build_image_records(
-        image_paths,
+    records = parallel_build_image_records_streaming(
+        discover_image_paths(image_root),
         image_root=image_root,
         dataset_root=dataset_root,
         dataset_name=config.dataset_name,
@@ -102,6 +99,16 @@ def build_image_manifest(config: ImageManifestConfig) -> Dict[str, Any]:
 def resolve_image_root(dataset_root: Path) -> Path:
     candidate = dataset_root / "images"
     return candidate if candidate.exists() and candidate.is_dir() else dataset_root
+
+
+def discover_image_paths(image_root: Path) -> Iterator[Path]:
+    for root, dirnames, filenames in os.walk(image_root):
+        dirnames.sort()
+        root_path = Path(root)
+        for filename in sorted(filenames):
+            path = root_path / filename
+            if path.suffix.lower() in COMMON_IMAGE_EXTENSIONS and path.is_file():
+                yield path
 
 
 def load_metadata_index(dataset_root: Path) -> Dict[str, Dict[str, Any]]:
@@ -305,8 +312,8 @@ def parallel_map(items: Sequence[Any], fn: Any, workers: int) -> List[Any]:
         return list(executor.map(fn, items))
 
 
-def parallel_build_image_records(
-    items: Sequence[Path],
+def parallel_build_image_records_streaming(
+    items: Iterable[Path],
     *,
     image_root: Path,
     dataset_root: Path,
@@ -318,12 +325,8 @@ def parallel_build_image_records(
     progress_every: int,
     progress_label: str,
 ) -> List[Any]:
-    if not items:
-        return []
-
-    worker_count = max(1, min(workers, len(items)))
+    worker_count = max(1, workers)
     progress_step = max(1, progress_every)
-    total = len(items)
     started_at = time.time()
 
     if worker_count == 1:
@@ -340,18 +343,44 @@ def parallel_build_image_records(
                     resize_height=resize_height,
                 )
             )
-            if index % progress_step == 0 or index == total:
+            if index % progress_step == 0:
                 elapsed = time.time() - started_at
                 rate = index / elapsed if elapsed > 0 else 0.0
                 print(
-                    f"[{progress_label}] {index}/{total} done "
-                    f"({index / total:.1%}, {rate:.2f} img/s, elapsed={elapsed:.1f}s)",
+                    f"[{progress_label}] completed={index} discovered={index} "
+                    f"({rate:.2f} img/s, elapsed={elapsed:.1f}s)",
                     flush=True,
                 )
+        if records:
+            elapsed = time.time() - started_at
+            rate = len(records) / elapsed if elapsed > 0 else 0.0
+            print(
+                f"[{progress_label}] completed={len(records)} discovered={len(records)} "
+                f"({rate:.2f} img/s, elapsed={elapsed:.1f}s)",
+                flush=True,
+            )
         return records
 
-    results: List[Any] = [None] * total
+    items_iter = iter(items)
+    max_pending = max(worker_count * 4, worker_count)
+    next_index = 0
+    discovered = 0
     completed = 0
+    results_by_index: Dict[int, Any] = {}
+
+    def submit_next(executor: ProcessPoolExecutor, pending: Dict[Any, int]) -> bool:
+        nonlocal next_index
+        nonlocal discovered
+        try:
+            item = next(items_iter)
+        except StopIteration:
+            return False
+        future = executor.submit(build_image_record_worker, str(item))
+        pending[future] = next_index
+        next_index += 1
+        discovered += 1
+        return True
+
     with ProcessPoolExecutor(
         max_workers=worker_count,
         initializer=init_image_record_worker,
@@ -364,17 +393,24 @@ def parallel_build_image_records(
             resize_height,
         ),
     ) as executor:
-        future_to_index = {executor.submit(build_image_record_worker, str(item)): index for index, item in enumerate(items)}
-        for future in as_completed(future_to_index):
-            index = future_to_index[future]
-            results[index] = future.result()
-            completed += 1
-            if completed % progress_step == 0 or completed == total:
+        pending: Dict[Any, int] = {}
+        while len(pending) < max_pending and submit_next(executor, pending):
+            pass
+
+        while pending:
+            done, _ = wait(pending.keys(), return_when=FIRST_COMPLETED)
+            for future in done:
+                index = pending.pop(future)
+                results_by_index[index] = future.result()
+                completed += 1
+                while len(pending) < max_pending and submit_next(executor, pending):
+                    pass
+            if completed % progress_step == 0 or (not pending and completed == discovered):
                 elapsed = time.time() - started_at
                 rate = completed / elapsed if elapsed > 0 else 0.0
                 print(
-                    f"[{progress_label}] {completed}/{total} done "
-                    f"({completed / total:.1%}, {rate:.2f} img/s, elapsed={elapsed:.1f}s)",
+                    f"[{progress_label}] completed={completed} discovered={discovered} "
+                    f"inflight={len(pending)} ({rate:.2f} img/s, elapsed={elapsed:.1f}s)",
                     flush=True,
                 )
-    return results
+    return [results_by_index[index] for index in sorted(results_by_index)]
