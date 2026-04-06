@@ -57,7 +57,7 @@ def build_image_manifest(config: ImageManifestConfig) -> Dict[str, Any]:
         flush=True,
     )
 
-    records = parallel_build_image_records_streaming(
+    raw_records = parallel_build_image_records_streaming(
         discover_image_paths(image_root),
         image_root=image_root,
         dataset_root=dataset_root,
@@ -69,12 +69,15 @@ def build_image_manifest(config: ImageManifestConfig) -> Dict[str, Any]:
         progress_every=config.progress_every,
         progress_label=f"image_manifest:{config.dataset_name}",
     )
+    records = [record for record in raw_records if str(record.get("status", "ok")) != "error"]
+    error_records = [record for record in raw_records if str(record.get("status", "")) == "error"]
 
     summary = build_image_summary(
         dataset_root=dataset_root,
         image_root=image_root,
         dataset_name=config.dataset_name,
         records=records,
+        error_records=error_records,
         workers=config.workers,
     )
     manifest_rows = [
@@ -93,6 +96,7 @@ def build_image_manifest(config: ImageManifestConfig) -> Dict[str, Any]:
     return {
         "summary": summary,
         "records": manifest_rows,
+        "errors": error_records,
     }
 
 
@@ -196,12 +200,56 @@ def build_image_record(
     return record
 
 
+def build_image_record_safe(
+    *,
+    path: Path,
+    image_root: Path,
+    dataset_root: Path,
+    dataset_name: str,
+    metadata_index: Dict[str, Dict[str, Any]],
+    resize_width: int,
+    resize_height: int,
+) -> Dict[str, Any]:
+    try:
+        return build_image_record(
+            path=path,
+            image_root=image_root,
+            dataset_root=dataset_root,
+            dataset_name=dataset_name,
+            metadata_index=metadata_index,
+            resize_width=resize_width,
+            resize_height=resize_height,
+        )
+    except Exception as exc:
+        relative_image_path = ""
+        try:
+            relative_image_path = str(path.relative_to(image_root))
+        except Exception:
+            relative_image_path = path.name
+        return {
+            "dataset": dataset_name,
+            "image_path": str(path),
+            "relative_image_path": relative_image_path,
+            "source_root": str(dataset_root),
+            "image_root": str(image_root),
+            "filename": path.name,
+            "stem": path.stem,
+            "scene_id": path.stem,
+            "viewpoint_id": path.stem,
+            "suffix": path.suffix.lower(),
+            "metadata_match_found": False,
+            "status": "error",
+            "error": str(exc),
+        }
+
+
 def build_image_summary(
     *,
     dataset_root: Path,
     image_root: Path,
     dataset_name: str,
     records: Sequence[Dict[str, Any]],
+    error_records: Sequence[Dict[str, Any]],
     workers: int,
 ) -> Dict[str, Any]:
     extension_counts: Dict[str, int] = {}
@@ -221,6 +269,7 @@ def build_image_summary(
         "dataset_root": str(dataset_root),
         "image_root": str(image_root),
         "image_count": len(records),
+        "error_count": len(error_records),
         "metadata_match_count": matched_count,
         "workers": workers,
         "extension_counts": extension_counts,
@@ -291,7 +340,7 @@ def init_image_record_worker(
 def build_image_record_worker(path_str: str) -> Dict[str, Any]:
     if _WORKER_IMAGE_ROOT is None or _WORKER_DATASET_ROOT is None:
         raise RuntimeError("image manifest worker not initialized")
-    return build_image_record(
+    return build_image_record_safe(
         path=Path(path_str),
         image_root=_WORKER_IMAGE_ROOT,
         dataset_root=_WORKER_DATASET_ROOT,
@@ -333,7 +382,7 @@ def parallel_build_image_records_streaming(
         records: List[Any] = []
         for index, item in enumerate(items, start=1):
             records.append(
-                build_image_record(
+                build_image_record_safe(
                     path=item,
                     image_root=image_root,
                     dataset_root=dataset_root,
@@ -346,17 +395,19 @@ def parallel_build_image_records_streaming(
             if index % progress_step == 0:
                 elapsed = time.time() - started_at
                 rate = index / elapsed if elapsed > 0 else 0.0
+                error_count = sum(1 for record in records if str(record.get("status", "ok")) == "error")
                 print(
                     f"[{progress_label}] completed={index} discovered={index} "
-                    f"({rate:.2f} img/s, elapsed={elapsed:.1f}s)",
+                    f"errors={error_count} ({rate:.2f} img/s, elapsed={elapsed:.1f}s)",
                     flush=True,
                 )
         if records:
             elapsed = time.time() - started_at
             rate = len(records) / elapsed if elapsed > 0 else 0.0
+            error_count = sum(1 for record in records if str(record.get("status", "ok")) == "error")
             print(
                 f"[{progress_label}] completed={len(records)} discovered={len(records)} "
-                f"({rate:.2f} img/s, elapsed={elapsed:.1f}s)",
+                f"errors={error_count} ({rate:.2f} img/s, elapsed={elapsed:.1f}s)",
                 flush=True,
             )
         return records
@@ -366,6 +417,7 @@ def parallel_build_image_records_streaming(
     next_index = 0
     discovered = 0
     completed = 0
+    error_count = 0
     results_by_index: Dict[int, Any] = {}
 
     def submit_next(executor: ProcessPoolExecutor, pending: Dict[Any, int]) -> bool:
@@ -403,6 +455,8 @@ def parallel_build_image_records_streaming(
                 index = pending.pop(future)
                 results_by_index[index] = future.result()
                 completed += 1
+                if str(results_by_index[index].get("status", "ok")) == "error":
+                    error_count += 1
                 while len(pending) < max_pending and submit_next(executor, pending):
                     pass
             if completed % progress_step == 0 or (not pending and completed == discovered):
@@ -410,7 +464,8 @@ def parallel_build_image_records_streaming(
                 rate = completed / elapsed if elapsed > 0 else 0.0
                 print(
                     f"[{progress_label}] completed={completed} discovered={discovered} "
-                    f"inflight={len(pending)} ({rate:.2f} img/s, elapsed={elapsed:.1f}s)",
+                    f"inflight={len(pending)} errors={error_count} "
+                    f"({rate:.2f} img/s, elapsed={elapsed:.1f}s)",
                     flush=True,
                 )
     return [results_by_index[index] for index in sorted(results_by_index)]

@@ -201,6 +201,7 @@ This script:
 - resizes every image in place to `2048x1024`
 - tries to match each image filename back to either `search_results.jsonl` or `metadata.jsonl`
 - prints periodic progress while resizing and indexing large image sets
+- skips unreadable or broken images instead of aborting the whole run
 - writes a simple JSON list with one record per image
 
 For datasets like `panox/`, the matcher will also read `metadata.jsonl` rows such as:

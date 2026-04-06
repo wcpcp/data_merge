@@ -119,6 +119,33 @@ class ImageManifestTest(unittest.TestCase):
         paths = [str(path.relative_to(image_root)) for path in discover_image_paths(image_root)]
         self.assertEqual(paths, ["a/01.jpg", "b/02.jpg"])
 
+    def test_build_image_manifest_skips_broken_image(self) -> None:
+        dataset_root = self.temp_dir / "broken"
+        image_root = dataset_root / "images"
+        image_root.mkdir(parents=True)
+
+        good_path = image_root / "good.jpg"
+        bad_path = image_root / "bad.jpg"
+        self._write_test_image(good_path, 64, 32)
+        bad_path.write_bytes(b"not-a-real-image")
+
+        payload = build_image_manifest(
+            ImageManifestConfig(
+                dataset_root=dataset_root,
+                output_manifest_path=dataset_root / "image_manifest.json",
+                dataset_name="broken_test",
+                workers=2,
+                progress_every=1,
+            )
+        )
+
+        self.assertEqual(payload["summary"]["image_count"], 1)
+        self.assertEqual(payload["summary"]["error_count"], 1)
+        self.assertEqual(len(payload["records"]), 1)
+        self.assertEqual(payload["records"][0]["image_path"], str(good_path))
+        self.assertEqual(len(payload["errors"]), 1)
+        self.assertEqual(payload["errors"][0]["image_path"], str(bad_path))
+
     def _write_test_image(self, path: Path, width: int, height: int) -> None:
         try:
             from PIL import Image
