@@ -4,7 +4,7 @@ import json
 import os
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -23,6 +23,13 @@ COMMON_IMAGE_EXTENSIONS = {
 }
 
 STEM_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+_WORKER_IMAGE_ROOT: Optional[Path] = None
+_WORKER_DATASET_ROOT: Optional[Path] = None
+_WORKER_DATASET_NAME: str = ""
+_WORKER_METADATA_INDEX: Dict[str, Dict[str, Any]] = {}
+_WORKER_RESIZE_WIDTH: int = 2048
+_WORKER_RESIZE_HEIGHT: int = 1024
 
 
 @dataclass
@@ -53,17 +60,14 @@ def build_image_manifest(config: ImageManifestConfig) -> Dict[str, Any]:
         flush=True,
     )
 
-    records = parallel_map_with_progress(
+    records = parallel_build_image_records(
         image_paths,
-        lambda path: build_image_record(
-            path=path,
-            image_root=image_root,
-            dataset_root=dataset_root,
-            dataset_name=config.dataset_name,
-            metadata_index=metadata_index,
-            resize_width=config.resize_width,
-            resize_height=config.resize_height,
-        ),
+        image_root=image_root,
+        dataset_root=dataset_root,
+        dataset_name=config.dataset_name,
+        metadata_index=metadata_index,
+        resize_width=config.resize_width,
+        resize_height=config.resize_height,
         workers=config.workers,
         progress_every=config.progress_every,
         progress_label=f"image_manifest:{config.dataset_name}",
@@ -254,6 +258,43 @@ def metadata_keys(row: Dict[str, object]) -> List[str]:
     return keys
 
 
+def init_image_record_worker(
+    image_root: str,
+    dataset_root: str,
+    dataset_name: str,
+    metadata_index: Dict[str, Dict[str, Any]],
+    resize_width: int,
+    resize_height: int,
+) -> None:
+    global _WORKER_IMAGE_ROOT
+    global _WORKER_DATASET_ROOT
+    global _WORKER_DATASET_NAME
+    global _WORKER_METADATA_INDEX
+    global _WORKER_RESIZE_WIDTH
+    global _WORKER_RESIZE_HEIGHT
+
+    _WORKER_IMAGE_ROOT = Path(image_root)
+    _WORKER_DATASET_ROOT = Path(dataset_root)
+    _WORKER_DATASET_NAME = dataset_name
+    _WORKER_METADATA_INDEX = metadata_index
+    _WORKER_RESIZE_WIDTH = resize_width
+    _WORKER_RESIZE_HEIGHT = resize_height
+
+
+def build_image_record_worker(path_str: str) -> Dict[str, Any]:
+    if _WORKER_IMAGE_ROOT is None or _WORKER_DATASET_ROOT is None:
+        raise RuntimeError("image manifest worker not initialized")
+    return build_image_record(
+        path=Path(path_str),
+        image_root=_WORKER_IMAGE_ROOT,
+        dataset_root=_WORKER_DATASET_ROOT,
+        dataset_name=_WORKER_DATASET_NAME,
+        metadata_index=_WORKER_METADATA_INDEX,
+        resize_width=_WORKER_RESIZE_WIDTH,
+        resize_height=_WORKER_RESIZE_HEIGHT,
+    )
+
+
 def parallel_map(items: Sequence[Any], fn: Any, workers: int) -> List[Any]:
     if not items:
         return []
@@ -264,9 +305,15 @@ def parallel_map(items: Sequence[Any], fn: Any, workers: int) -> List[Any]:
         return list(executor.map(fn, items))
 
 
-def parallel_map_with_progress(
-    items: Sequence[Any],
-    fn: Any,
+def parallel_build_image_records(
+    items: Sequence[Path],
+    *,
+    image_root: Path,
+    dataset_root: Path,
+    dataset_name: str,
+    metadata_index: Dict[str, Dict[str, Any]],
+    resize_width: int,
+    resize_height: int,
     workers: int,
     progress_every: int,
     progress_label: str,
@@ -282,7 +329,17 @@ def parallel_map_with_progress(
     if worker_count == 1:
         records: List[Any] = []
         for index, item in enumerate(items, start=1):
-            records.append(fn(item))
+            records.append(
+                build_image_record(
+                    path=item,
+                    image_root=image_root,
+                    dataset_root=dataset_root,
+                    dataset_name=dataset_name,
+                    metadata_index=metadata_index,
+                    resize_width=resize_width,
+                    resize_height=resize_height,
+                )
+            )
             if index % progress_step == 0 or index == total:
                 elapsed = time.time() - started_at
                 rate = index / elapsed if elapsed > 0 else 0.0
@@ -295,8 +352,19 @@ def parallel_map_with_progress(
 
     results: List[Any] = [None] * total
     completed = 0
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        future_to_index = {executor.submit(fn, item): index for index, item in enumerate(items)}
+    with ProcessPoolExecutor(
+        max_workers=worker_count,
+        initializer=init_image_record_worker,
+        initargs=(
+            str(image_root),
+            str(dataset_root),
+            dataset_name,
+            metadata_index,
+            resize_width,
+            resize_height,
+        ),
+    ) as executor:
+        future_to_index = {executor.submit(build_image_record_worker, str(item)): index for index, item in enumerate(items)}
         for future in as_completed(future_to_index):
             index = future_to_index[future]
             results[index] = future.result()
