@@ -4,9 +4,18 @@ from pathlib import Path
 from typing import Optional, Tuple
 import shutil
 import subprocess
+import warnings
 
 
 _IMAGE_BACKEND: Optional[str] = None
+
+
+def configure_pillow_for_large_images() -> None:
+    from PIL import Image, ImageFile
+
+    ImageFile.LOAD_TRUNCATED_IMAGES = True
+    Image.MAX_IMAGE_PIXELS = None
+    warnings.simplefilter("ignore", Image.DecompressionBombWarning)
 
 
 def resize_image_in_place(path: Path, width: int, height: int) -> None:
@@ -30,6 +39,7 @@ def detect_image_backend() -> Optional[str]:
     try:
         from PIL import Image  # noqa: F401
 
+        configure_pillow_for_large_images()
         _IMAGE_BACKEND = "pillow"
         return _IMAGE_BACKEND
     except Exception:
@@ -50,6 +60,7 @@ def detect_image_backend() -> Optional[str]:
 def resize_with_pillow(path: Path, width: int, height: int) -> None:
     from PIL import Image
 
+    configure_pillow_for_large_images()
     with Image.open(path) as image:
         if image.size == (width, height):
             return
@@ -102,6 +113,7 @@ def get_image_size(path: Path) -> Optional[Tuple[int, int]]:
     if backend == "pillow":
         from PIL import Image
 
+        configure_pillow_for_large_images()
         with Image.open(path) as image:
             return image.size
     if backend == "opencv":
