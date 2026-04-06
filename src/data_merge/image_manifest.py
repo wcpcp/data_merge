@@ -40,7 +40,7 @@ def build_image_manifest(config: ImageManifestConfig) -> Dict[str, Any]:
         raise FileNotFoundError(f"dataset root not found: {dataset_root}")
 
     image_root = resolve_image_root(dataset_root)
-    metadata_index = load_search_results_index(dataset_root)
+    metadata_index = load_metadata_index(dataset_root)
     image_paths = sorted(
         path for path in image_root.rglob("*") if path.is_file() and path.suffix.lower() in COMMON_IMAGE_EXTENSIONS
     )
@@ -90,19 +90,23 @@ def resolve_image_root(dataset_root: Path) -> Path:
     return candidate if candidate.exists() and candidate.is_dir() else dataset_root
 
 
-def load_search_results_index(dataset_root: Path) -> Dict[str, Dict[str, Any]]:
-    search_results_path = dataset_root / "search_results.jsonl"
-    if not search_results_path.exists():
-        return {}
-
+def load_metadata_index(dataset_root: Path) -> Dict[str, Dict[str, Any]]:
     index: Dict[str, Dict[str, Any]] = {}
-    with search_results_path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            row = json.loads(line)
-            index[stable_stem(row)] = row
+    metadata_paths = [
+        dataset_root / "search_results.jsonl",
+        dataset_root / "metadata.jsonl",
+    ]
+    for metadata_path in metadata_paths:
+        if not metadata_path.exists():
+            continue
+        with metadata_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                for key in metadata_keys(row):
+                    index.setdefault(key, row)
     return index
 
 
@@ -140,6 +144,7 @@ def build_image_record(
     if matched is not None:
         record["source"] = matched.get("source")
         record["source_id"] = matched.get("source_id")
+        record["id"] = matched.get("id")
         record["provider"] = matched.get("provider")
         record["title"] = matched.get("title")
         record["caption"] = matched.get("caption")
@@ -154,6 +159,19 @@ def build_image_record(
         record["quality_bucket"] = matched.get("quality_bucket")
         record["is_360"] = matched.get("is_360")
         record["query"] = matched.get("query")
+        record["asset_url"] = matched.get("asset_url")
+        record["collection"] = matched.get("collection")
+        record["datetime"] = matched.get("datetime")
+        record["asset_key"] = matched.get("asset_key")
+        record["erp_reason"] = matched.get("erp_reason")
+        record["quality_grade"] = matched.get("quality_grade")
+        record["quality_score_value"] = matched.get("quality_score_value")
+        record["lon"] = matched.get("lon")
+        record["lat"] = matched.get("lat")
+        record["image_name"] = matched.get("image_name")
+        record["local_path"] = matched.get("local_path")
+        record["source_metadata_csv"] = matched.get("source_metadata_csv")
+        record["source_region_dir"] = matched.get("source_region_dir")
     return record
 
 
@@ -190,7 +208,7 @@ def build_image_summary(
 
 
 def choose_image_source(record: Dict[str, Any]) -> str:
-    for key in ["landing_url", "file_url", "source_id", "source", "relative_image_path", "image_path"]:
+    for key in ["asset_url", "landing_url", "file_url", "source_id", "id", "source", "relative_image_path", "image_path"]:
         value = record.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -203,6 +221,27 @@ def stable_stem(row: Dict[str, object]) -> str:
     source_id = Path(source_id).stem
     combined = STEM_RE.sub("_", f"{source}__{source_id}").strip("._")
     return combined[:180] or "item"
+
+
+def metadata_keys(row: Dict[str, object]) -> List[str]:
+    keys: List[str] = []
+
+    def add(value: object) -> None:
+        if not isinstance(value, str):
+            return
+        stem = Path(value.strip()).stem
+        if stem and stem not in keys:
+            keys.append(stem)
+
+    add(str(row.get("image_name") or ""))
+    add(str(row.get("local_path") or ""))
+    add(str(row.get("source_id") or ""))
+    add(str(row.get("id") or ""))
+
+    stable = stable_stem(row)
+    if stable not in keys:
+        keys.append(stable)
+    return keys
 
 
 def parallel_map(items: Sequence[Any], fn: Any, workers: int) -> List[Any]:

@@ -198,8 +198,17 @@ This script:
 - auto-detects `images/` under the dataset root if present
 - scans all common image files
 - resizes every image in place to `2048x1024`
-- tries to match each image filename back to `search_results.jsonl`
+- tries to match each image filename back to either `search_results.jsonl` or `metadata.jsonl`
 - writes a simple JSON list with one record per image
+
+For datasets like `panox/`, the matcher will also read `metadata.jsonl` rows such as:
+
+- `image_name`
+- `local_path`
+- `asset_url`
+- `id`
+
+and use them to align images with their source metadata while keeping the final manifest format unchanged.
 
 Example output structure:
 
