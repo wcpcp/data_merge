@@ -35,8 +35,16 @@ def main() -> int:
     parser.add_argument("--max-osr-records", type=int, help="Optional cap for OSR-Bench converted records.")
     parser.add_argument("--max-thinking-records", type=int, help="Optional cap for Thinking in 360 converted records.")
     parser.add_argument("--max-panoenv-records", type=int, help="Optional cap for PanoEnv converted records.")
-    parser.add_argument("--skip-osr-bench", action="store_true", help="Do not export OSR-Bench.")
-    parser.add_argument("--skip-thinking-in-360", action="store_true", help="Do not export Thinking in 360.")
+    parser.add_argument(
+        "--include-osr-bench",
+        action="store_true",
+        help="Explicitly export OSR-Bench into training format. This is off by default because the public release is benchmark-oriented and does not provide an official QA train split.",
+    )
+    parser.add_argument(
+        "--include-thinking-in-360",
+        action="store_true",
+        help="Explicitly export Thinking in 360 HOS/HPS SFT data. This is off by default because the released observations are perspective crops rather than ERP panoramas.",
+    )
     parser.add_argument("--skip-panoenv", action="store_true", help="Do not export PanoEnv.")
     args = parser.parse_args()
 
@@ -46,8 +54,8 @@ def main() -> int:
         max_osr_records=args.max_osr_records,
         max_thinking_records=args.max_thinking_records,
         max_panoenv_records=args.max_panoenv_records,
-        include_osr_bench=not args.skip_osr_bench,
-        include_thinking_in_360=not args.skip_thinking_in_360,
+        include_osr_bench=args.include_osr_bench,
+        include_thinking_in_360=args.include_thinking_in_360,
         include_panoenv=not args.skip_panoenv,
     )
     stats = build_external_benchmark_training_sets(config)

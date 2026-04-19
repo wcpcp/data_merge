@@ -15,6 +15,8 @@ if str(SRC) not in sys.path:
 
 from data_merge.external_benchmark_sft import (
     ERP_MULTIMODAL_SYSTEM_PROMPT,
+    ExternalBenchmarkBuildConfig,
+    build_external_benchmark_training_sets,
     build_panoenv_training_items_from_row,
     build_single_turn_training_item,
     build_thinking_record,
@@ -116,6 +118,35 @@ class ExternalBenchmarkSftTest(unittest.TestCase):
         self.assertEqual(items[0]["messages"][1]["content"][0]["text"], "What is the environment type?")
         self.assertEqual(items[1]["messages"][2]["content"][0]["text"], "3")
         self.assertEqual(items[0]["images"], [str(image_path)])
+
+    def test_build_external_benchmark_training_sets_writes_empty_files_for_skipped_sources(self) -> None:
+        output_dir = self.temp_dir / "output"
+        cache_dir = self.temp_dir / "cache"
+        stats = build_external_benchmark_training_sets(
+            ExternalBenchmarkBuildConfig(
+                output_dir=output_dir,
+                cache_dir=cache_dir,
+                include_osr_bench=False,
+                include_thinking_in_360=False,
+                include_panoenv=False,
+            )
+        )
+
+        self.assertEqual(stats["counts"]["osr_bench"], 0)
+        self.assertEqual(stats["counts"]["thinking_in_360"], 0)
+        self.assertEqual(stats["counts"]["panoenv"], 0)
+        self.assertIn("skipped_by_default", stats["notes"]["osr_bench"]["export_status"])
+        self.assertIn("perspective_only", stats["notes"]["thinking_in_360"]["export_status"])
+        self.assertEqual(json_load(output_dir / "osr_bench_training_multimodal_blocks.json"), [])
+        self.assertEqual(json_load(output_dir / "thinking_in_360_training_multimodal_blocks.json"), [])
+        self.assertEqual(json_load(output_dir / "panoenv_training_multimodal_blocks.json"), [])
+
+
+def json_load(path: Path):
+    import json
+
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
 
 
 if __name__ == "__main__":

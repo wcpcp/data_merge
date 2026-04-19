@@ -40,25 +40,32 @@ THINKING_IN_360_SOURCES = (
 PANOENV_DATASET_CANDIDATES = ("7zkk/PanoEnv", "guangmulizi/PanoEnv")
 
 OSR_BENCH_NOTES = {
-    "trainable": True,
+    "official_training_data_available": False,
+    "recommended_for_panorama_training": False,
+    "conversion_supported_with_opt_in": True,
     "benchmark_safe_for_same_benchmark": False,
     "summary": (
-        "OSR-Bench ships official QA pairs and images, so it can be converted into multimodal SFT data. "
-        "However, the public release does not expose a clean training split, so training on all samples will "
-        "contaminate OSR-Bench evaluation unless you create your own holdout."
+        "OSR-Bench is primarily a benchmark release. The public package exposes panorama images plus a single "
+        "qa.csv file, but no official QA train/val/test split for model fitting. You can still force-convert it "
+        "into training format, but then OSR-Bench evaluation is no longer clean."
     ),
     "official_sources": [
         "https://huggingface.co/datasets/UUUserna/OSR-Bench",
         OSR_BENCH_QA_URL,
+        "https://arxiv.org/abs/2505.11907",
     ],
 }
 
 THINKING_IN_360_NOTES = {
-    "trainable": True,
+    "official_training_data_available": True,
+    "recommended_for_panorama_training": False,
+    "conversion_supported_with_opt_in": True,
     "benchmark_safe_for_same_benchmark": True,
     "summary": (
-        "Use the official HOS-SFT and HPS-SFT releases for training. They are already SFT corpora. "
-        "Do not train on HSTAR-Bench if you want a clean benchmark result."
+        "The official HOS-SFT and HPS-SFT releases are real SFT corpora, but the released observations are "
+        "narrow-FoV perspective views sampled from a 360 panorama rather than ERP panoramas themselves. "
+        "That makes them misaligned with a panorama-native foundation model unless you explicitly want mixed "
+        "perspective+ERP training."
     ),
     "official_sources": [
         "https://humanoid-vstar.github.io/",
@@ -68,7 +75,9 @@ THINKING_IN_360_NOTES = {
 }
 
 PANOENV_NOTES = {
-    "trainable": True,
+    "official_training_data_available": True,
+    "recommended_for_panorama_training": True,
+    "conversion_supported_with_opt_in": True,
     "benchmark_safe_for_same_benchmark": True,
     "summary": (
         "Use only the official train split from PanoEnv for training. Validation and test should stay untouched "
@@ -88,8 +97,8 @@ class ExternalBenchmarkBuildConfig:
     max_osr_records: Optional[int] = None
     max_thinking_records: Optional[int] = None
     max_panoenv_records: Optional[int] = None
-    include_osr_bench: bool = True
-    include_thinking_in_360: bool = True
+    include_osr_bench: bool = False
+    include_thinking_in_360: bool = False
     include_panoenv: bool = True
 
 
@@ -109,27 +118,39 @@ def build_external_benchmark_training_sets(config: ExternalBenchmarkBuildConfig)
         },
     }
 
+    osr_path = config.output_dir / "osr_bench_training_multimodal_blocks.json"
     if config.include_osr_bench:
         osr_items = build_osr_bench_training_items(config.cache_dir, config.max_osr_records)
-        osr_path = config.output_dir / "osr_bench_training_multimodal_blocks.json"
-        _write_json(osr_path, osr_items)
-        stats["files"]["osr_bench"] = str(osr_path)
         stats["counts"]["osr_bench"] = len(osr_items)
+    else:
+        osr_items = []
+        stats["counts"]["osr_bench"] = 0
+        stats["notes"]["osr_bench"]["export_status"] = "skipped_by_default_because_no_official_training_split"
+    _write_json(osr_path, osr_items)
+    stats["files"]["osr_bench"] = str(osr_path)
 
+    thinking_path = config.output_dir / "thinking_in_360_training_multimodal_blocks.json"
     if config.include_thinking_in_360:
         thinking_items = build_thinking_in_360_training_items(config.cache_dir, config.max_thinking_records)
-        thinking_path = config.output_dir / "thinking_in_360_training_multimodal_blocks.json"
-        _write_json(thinking_path, thinking_items)
-        stats["files"]["thinking_in_360"] = str(thinking_path)
         stats["counts"]["thinking_in_360"] = len(thinking_items)
+    else:
+        thinking_items = []
+        stats["counts"]["thinking_in_360"] = 0
+        stats["notes"]["thinking_in_360"]["export_status"] = "skipped_by_default_because_public_sft_is_perspective_only"
+    _write_json(thinking_path, thinking_items)
+    stats["files"]["thinking_in_360"] = str(thinking_path)
 
+    panoenv_path = config.output_dir / "panoenv_training_multimodal_blocks.json"
     if config.include_panoenv:
         panoenv_items, dataset_name = build_panoenv_training_items(config.cache_dir, config.max_panoenv_records)
-        panoenv_path = config.output_dir / "panoenv_training_multimodal_blocks.json"
-        _write_json(panoenv_path, panoenv_items)
-        stats["files"]["panoenv"] = str(panoenv_path)
         stats["counts"]["panoenv"] = len(panoenv_items)
         stats["notes"]["panoenv"]["resolved_dataset"] = dataset_name
+    else:
+        panoenv_items = []
+        stats["counts"]["panoenv"] = 0
+        stats["notes"]["panoenv"]["export_status"] = "skipped_by_request"
+    _write_json(panoenv_path, panoenv_items)
+    stats["files"]["panoenv"] = str(panoenv_path)
 
     stats_path = config.output_dir / "external_benchmark_stats.json"
     stats["files"]["stats"] = str(stats_path)
