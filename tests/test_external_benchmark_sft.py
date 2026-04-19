@@ -18,8 +18,10 @@ from data_merge.external_benchmark_sft import (
     ExternalBenchmarkBuildConfig,
     assign_group_to_split,
     build_external_benchmark_training_sets,
+    build_panorama_angle_prompt,
     build_panoenv_training_items_from_row,
     build_single_turn_training_item,
+    build_thinking_panorama_target_records,
     build_thinking_records,
     build_thinking_record,
     build_thinking_rl_records,
@@ -127,6 +129,43 @@ class ExternalBenchmarkSftTest(unittest.TestCase):
         self.assertIn("rotate(45,0)", items[0]["messages"][2]["content"][0]["text"])
         self.assertEqual(items[0]["images"], [str(image_path)])
 
+    def test_build_thinking_panorama_target_records_uses_final_submit_only(self) -> None:
+        extract_dir = self.temp_dir / "thinking_pano_target"
+        manifest_dir = extract_dir / "hos_sft_panorama" / "135"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        image_path = manifest_dir / "frame_0001.jpg"
+        image_path.write_bytes(b"demo")
+        manifest_path = manifest_dir / "sft.json"
+        manifest_path.write_text("[]", encoding="utf-8")
+
+        items = build_thinking_panorama_target_records(
+            row={
+                "task": "look for a store selling sunglasses",
+                "outputs": [
+                    {
+                        "input_angles": [0, 0],
+                        "content": "<think>rotate</think><action>rotate(8,6)</action>",
+                        "action": "rotate(8,6)",
+                    },
+                    {
+                        "input_angles": [8, 6],
+                        "content": "<think>submit</think><action>submit(8,6)</action>",
+                        "action": "submit(8,6)",
+                    },
+                ],
+            },
+            record_index=0,
+            source_name="hos_sft_panorama",
+            extract_dir=extract_dir,
+            manifest_path=manifest_path,
+        )
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["id"], "thinking_in_360:hos_sft_panorama:000000")
+        self.assertEqual(items[0]["images"], [str(image_path)])
+        self.assertIn("image center is yaw=0", items[0]["messages"][1]["content"][0]["text"])
+        self.assertEqual(items[0]["messages"][2]["content"][0]["text"], "[8.00, 6.00]")
+
     def test_build_thinking_records_can_strip_reasoning(self) -> None:
         extract_dir = self.temp_dir / "thinking_strip"
         manifest_dir = extract_dir / "hos_sft_panorama" / "9"
@@ -175,9 +214,8 @@ class ExternalBenchmarkSftTest(unittest.TestCase):
         items = build_thinking_rl_records(
             row={
                 "task": "Find the goods with $10 off discount",
-                "initial yaw": [0, 90, 180, 270],
-                "overlap_rate": [0.0, 0.996511, 0.1, 0.0],
-                "level": [2, 0, 2, 2],
+                "yaw": [56.5, 87.8],
+                "pitch": [-34.0, 6.9],
             },
             record_index=0,
             source_name="hos_train_rl",
@@ -187,14 +225,19 @@ class ExternalBenchmarkSftTest(unittest.TestCase):
 
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["images"], [str(image_path)])
-        self.assertIn("Candidate initial yaw angles are: 0, 90, 180, 270", items[0]["messages"][1]["content"][0]["text"])
-        self.assertIn("90 degrees", items[0]["messages"][2]["content"][0]["text"])
+        self.assertEqual(items[0]["messages"][2]["content"][0]["text"], "[72.15, -13.55]")
 
     def test_strip_reasoning_tags_keeps_action_payload(self) -> None:
         self.assertEqual(
             strip_reasoning_tags("<think>reasoning</think><action>move_forward</action>"),
             "move_forward",
         )
+
+    def test_build_panorama_angle_prompt_uses_erp_convention(self) -> None:
+        prompt = build_panorama_angle_prompt("Locate the target")
+        self.assertIn("yaw=0", prompt)
+        self.assertIn("-180", prompt)
+        self.assertIn("180", prompt)
 
     def test_build_panoenv_training_items_from_row(self) -> None:
         image_path = self.temp_dir / "panoenv.jpg"

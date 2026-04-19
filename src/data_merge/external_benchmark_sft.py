@@ -275,6 +275,14 @@ def build_thinking_in_360_training_items(
                         extract_dir=extract_dir,
                         manifest_path=manifest_path,
                     )
+                elif mode == "panorama_sft":
+                    row_items = build_thinking_panorama_target_records(
+                        row=row,
+                        record_index=row_index,
+                        source_name=str(source["source_name"]),
+                        extract_dir=extract_dir,
+                        manifest_path=manifest_path,
+                    )
                 else:
                     row_items = build_thinking_records(
                         row=row,
@@ -289,6 +297,38 @@ def build_thinking_in_360_training_items(
                     row_items = row_items[:remaining]
                 items.extend(row_items)
     return items
+
+
+def build_thinking_panorama_target_records(
+    row: Dict[str, Any],
+    record_index: int,
+    source_name: str,
+    extract_dir: Path,
+    manifest_path: Path,
+) -> List[Dict[str, Any]]:
+    image_paths = resolve_row_images(row, extract_dir, manifest_path=manifest_path)
+    if not image_paths:
+        return []
+
+    task = str(row.get("task", "")).strip()
+    outputs = row.get("outputs", [])
+    if not isinstance(outputs, list) or not outputs:
+        return []
+
+    final_angles = extract_final_submit_angles(outputs)
+    if final_angles is None:
+        return []
+    yaw, pitch = final_angles
+
+    return [
+        build_single_turn_training_item(
+            record_id=f"thinking_in_360:{source_name}:{record_index:06d}",
+            question=build_panorama_angle_prompt(task),
+            answer=format_angle_answer(yaw, pitch),
+            image_paths=image_paths,
+            system_prompt=ERP_MULTIMODAL_SYSTEM_PROMPT,
+        )
+    ]
 
 
 def build_panoenv_training_items(
@@ -529,34 +569,24 @@ def build_thinking_rl_records(
         return []
 
     task = str(row.get("task", "")).strip()
-    initial_yaws = row.get("initial yaw", [])
-    overlaps = row.get("overlap_rate", [])
-    levels = row.get("level", [])
-    if not isinstance(initial_yaws, list) or not initial_yaws:
+    yaw_range = row.get("yaw", [])
+    pitch_range = row.get("pitch", [])
+    if not isinstance(yaw_range, list) or len(yaw_range) < 2:
+        return []
+    if not isinstance(pitch_range, list) or len(pitch_range) < 2:
         return []
 
-    best_index = choose_best_rl_initial_view(initial_yaws, overlaps, levels)
-    best_yaw = initial_yaws[best_index]
-    best_overlap = overlaps[best_index] if isinstance(overlaps, list) and best_index < len(overlaps) else None
-    best_level = levels[best_index] if isinstance(levels, list) and best_index < len(levels) else None
+    try:
+        yaw_center = (float(yaw_range[0]) + float(yaw_range[1])) / 2.0
+        pitch_center = (float(pitch_range[0]) + float(pitch_range[1])) / 2.0
+    except Exception:
+        return []
 
-    prompt = (
-        f"Task: {task or 'Complete the visual search task.'}\n"
-        f"The image is a full ERP panorama. Candidate initial yaw angles are: {', '.join(str(v) for v in initial_yaws)} degrees.\n"
-        "Which initial yaw is the best starting view for this task? Reply with one yaw angle only."
-    )
-    answer = f"{best_yaw}"
-    if best_overlap is not None or best_level is not None:
-        answer = (
-            f"{best_yaw} degrees"
-            + (f" (overlap_rate={best_overlap}" if best_overlap is not None else "")
-            + (f", level={best_level})" if best_level is not None else (")" if best_overlap is not None else ""))
-        )
     return [
         build_single_turn_training_item(
             record_id=f"thinking_in_360:{source_name}:{record_index:06d}",
-            question=prompt,
-            answer=answer,
+            question=build_panorama_angle_prompt(task),
+            answer=format_angle_answer(yaw_center, pitch_center),
             image_paths=image_paths,
             system_prompt=ERP_MULTIMODAL_SYSTEM_PROMPT,
         )
@@ -609,6 +639,53 @@ def choose_best_rl_initial_view(initial_yaws: Sequence[Any], overlaps: Any, leve
             best_index = index
             best_key = candidate_key
     return best_index
+
+
+def extract_final_submit_angles(outputs: Sequence[Any]) -> Optional[Tuple[float, float]]:
+    for output in reversed(outputs):
+        if not isinstance(output, dict):
+            continue
+        action_text = str(output.get("action", "")).strip()
+        parsed = parse_submit_angles(action_text)
+        if parsed is not None:
+            return parsed
+        content_text = str(output.get("content", "")).strip()
+        parsed = parse_submit_angles(content_text)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def parse_submit_angles(text: str) -> Optional[Tuple[float, float]]:
+    match = re.search(r"submit\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)", text, flags=re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        yaw = float(match.group(1))
+        pitch = float(match.group(2))
+    except Exception:
+        return None
+    return normalize_erp_yaw(yaw), pitch
+
+
+def normalize_erp_yaw(yaw: float) -> float:
+    normalized = ((float(yaw) + 180.0) % 360.0) - 180.0
+    if normalized == -180.0 and float(yaw) > 0:
+        return 180.0
+    return normalized
+
+
+def format_angle_answer(yaw: float, pitch: float) -> str:
+    return f"[{normalize_erp_yaw(yaw):.2f}, {float(pitch):.2f}]"
+
+
+def build_panorama_angle_prompt(task: str) -> str:
+    task_text = task.strip() if task.strip() else "Complete the panorama grounding task."
+    return (
+        f"Task: {task_text}\n"
+        "The input is a full ERP panorama. Return only the final target center angles as [yaw_deg, pitch_deg].\n"
+        "Angle convention: the image center is yaw=0, the left side spans toward -180, and the right side spans toward 180."
+    )
 
 
 def strip_reasoning_tags(text: str) -> str:

@@ -255,8 +255,10 @@ Default behavior:
 Thinking in 360 details:
 
 - The default export uses the official panorama SFT releases `hos_sft_panorama` and `hps_sft_panorama`, which contain ERP panoramas rather than narrow-FoV perspective crops.
-- It also converts the official RL train packages `hos_train.zip` and `hps_train.zip` from `humanoid-vstar/hvs_rl` into SFT-style items by asking the model to choose the best initial yaw from the candidate starting views.
-- By default the assistant output is kept as released, including `<think>...</think>` traces when present. If you want answer-only supervision, add `--strip-thinking-in-360-reasoning`.
+- For panorama SFT, the exporter now discards intermediate `rotate(...)` actions and keeps only the final `submit(yaw,pitch)` target as supervision, because this repo trains directly on the full ERP panorama rather than a moving perspective crop.
+- It also converts the official RL train packages `hos_train.zip` and `hps_train.zip` from `humanoid-vstar/hvs_rl` into SFT-style items by regressing the final target center angles derived from the annotated yaw/pitch ranges.
+- The exported angle convention is panorama-native: the image center is `yaw=0`, the left side extends toward `-180`, and the right side extends toward `180`.
+- The original `<think>...</think>` traces are not used in the exported panorama-angle supervision because they mainly justify intermediate re-orientation steps that are unnecessary when the full ERP panorama is already visible.
 
 The OSR-Bench files are empty by default on purpose:
 
