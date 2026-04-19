@@ -50,6 +50,11 @@ def main() -> int:
         action="store_true",
         help="Do not export the official Thinking in 360 panorama SFT data.",
     )
+    parser.add_argument(
+        "--strip-thinking-in-360-reasoning",
+        action="store_true",
+        help="Remove <think> traces from Thinking in 360 assistant outputs and keep only executable answers/actions.",
+    )
     parser.add_argument("--skip-panoenv", action="store_true", help="Do not export PanoEnv.")
     args = parser.parse_args()
 
@@ -62,6 +67,7 @@ def main() -> int:
         include_osr_bench=args.include_osr_bench,
         include_thinking_in_360=not args.skip_thinking_in_360,
         include_panoenv=not args.skip_panoenv,
+        strip_thinking_in_360_reasoning=args.strip_thinking_in_360_reasoning,
         panoenv_allowed_question_types=tuple(
             value.strip() for value in args.panoenv_question_types.split(",") if value.strip()
         ),

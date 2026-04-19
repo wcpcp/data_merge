@@ -22,7 +22,10 @@ from data_merge.external_benchmark_sft import (
     build_single_turn_training_item,
     build_thinking_records,
     build_thinking_record,
+    build_thinking_rl_records,
+    choose_best_rl_initial_view,
     sharegpt_user_text_to_blocks,
+    strip_reasoning_tags,
 )
 
 
@@ -123,6 +126,75 @@ class ExternalBenchmarkSftTest(unittest.TestCase):
         self.assertIn("yaw=180", items[0]["messages"][1]["content"][0]["text"])
         self.assertIn("rotate(45,0)", items[0]["messages"][2]["content"][0]["text"])
         self.assertEqual(items[0]["images"], [str(image_path)])
+
+    def test_build_thinking_records_can_strip_reasoning(self) -> None:
+        extract_dir = self.temp_dir / "thinking_strip"
+        manifest_dir = extract_dir / "hos_sft_panorama" / "9"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        image_path = manifest_dir / "frame_0002.jpg"
+        image_path.write_bytes(b"demo")
+        manifest_path = manifest_dir / "sft.json"
+        manifest_path.write_text("[]", encoding="utf-8")
+
+        items = build_thinking_records(
+            row={
+                "task": "Locate the red box",
+                "outputs": [
+                    {
+                        "input_angles": [90, 10],
+                        "content": "<think>First inspect the shelves.</think><action>rotate(-30,0)</action>",
+                    }
+                ],
+            },
+            record_index=1,
+            source_name="hos_sft_panorama",
+            extract_dir=extract_dir,
+            manifest_path=manifest_path,
+            strip_reasoning=True,
+        )
+
+        self.assertEqual(items[0]["messages"][2]["content"][0]["text"], "rotate(-30,0)")
+
+    def test_choose_best_rl_initial_view_prefers_overlap_then_level(self) -> None:
+        index = choose_best_rl_initial_view(
+            initial_yaws=[0, 90, 180, 270],
+            overlaps=[0.1, 0.7, 0.7, 0.2],
+            levels=[3, 2, 1, 0],
+        )
+        self.assertEqual(index, 2)
+
+    def test_build_thinking_rl_records_prefers_panorama_and_best_yaw(self) -> None:
+        extract_dir = self.temp_dir / "thinking_rl"
+        sample_dir = extract_dir / "hos_train_rl" / "307"
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        image_path = sample_dir / "pano_023.png"
+        image_path.write_bytes(b"demo")
+        manifest_path = sample_dir / "annotation.json"
+        manifest_path.write_text("[]", encoding="utf-8")
+
+        items = build_thinking_rl_records(
+            row={
+                "task": "Find the goods with $10 off discount",
+                "initial yaw": [0, 90, 180, 270],
+                "overlap_rate": [0.0, 0.996511, 0.1, 0.0],
+                "level": [2, 0, 2, 2],
+            },
+            record_index=0,
+            source_name="hos_train_rl",
+            extract_dir=extract_dir,
+            manifest_path=manifest_path,
+        )
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["images"], [str(image_path)])
+        self.assertIn("Candidate initial yaw angles are: 0, 90, 180, 270", items[0]["messages"][1]["content"][0]["text"])
+        self.assertIn("90 degrees", items[0]["messages"][2]["content"][0]["text"])
+
+    def test_strip_reasoning_tags_keeps_action_payload(self) -> None:
+        self.assertEqual(
+            strip_reasoning_tags("<think>reasoning</think><action>move_forward</action>"),
+            "move_forward",
+        )
 
     def test_build_panoenv_training_items_from_row(self) -> None:
         image_path = self.temp_dir / "panoenv.jpg"

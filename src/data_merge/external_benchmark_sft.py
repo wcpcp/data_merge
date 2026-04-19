@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import re
 import shutil
 import tempfile
 import zipfile
@@ -23,12 +24,28 @@ THINKING_IN_360_SOURCES = (
         "display_name": "Thinking in 360 / HOS-SFT Panorama",
         "zip_url": "https://huggingface.co/datasets/humanoid-vstar/hos_sft_panorama/resolve/main/hos_sft_panorama.zip?download=true",
         "zip_filename": "hos_sft_panorama.zip",
+        "mode": "panorama_sft",
     },
     {
         "source_name": "hps_sft_panorama",
         "display_name": "Thinking in 360 / HPS-SFT Panorama",
         "zip_url": "https://huggingface.co/datasets/humanoid-vstar/hps_sft_panorama/resolve/main/hps_sft_pano.zip?download=true",
         "zip_filename": "hps_sft_pano.zip",
+        "mode": "panorama_sft",
+    },
+    {
+        "source_name": "hos_train_rl",
+        "display_name": "Thinking in 360 / HOS RL",
+        "zip_url": "https://huggingface.co/datasets/humanoid-vstar/hvs_rl/resolve/main/hos_train.zip?download=true",
+        "zip_filename": "hos_train.zip",
+        "mode": "rl_annotation",
+    },
+    {
+        "source_name": "hps_train_rl",
+        "display_name": "Thinking in 360 / HPS RL",
+        "zip_url": "https://huggingface.co/datasets/humanoid-vstar/hvs_rl/resolve/main/hps_train.zip?download=true",
+        "zip_filename": "hps_train.zip",
+        "mode": "rl_annotation",
     },
 )
 
@@ -58,13 +75,14 @@ THINKING_IN_360_NOTES = {
     "benchmark_safe_for_same_benchmark": True,
     "summary": (
         "Use the official panorama SFT releases for training. They align with panorama-native modeling better than "
-        "the older perspective-view HOS/HPS SFT dumps. There is no need to fall back to the RL trajectories unless "
-        "the panorama SFT package becomes unavailable."
+        "the older perspective-view HOS/HPS SFT dumps. The official RL train packages also contain ERP panorama "
+        "images plus task annotations, so they can be converted into action-supervision SFT data."
     ),
     "official_sources": [
         "https://humanoid-vstar.github.io/",
         "https://huggingface.co/datasets/humanoid-vstar/hos_sft_panorama",
         "https://huggingface.co/datasets/humanoid-vstar/hps_sft_panorama",
+        "https://huggingface.co/datasets/humanoid-vstar/hvs_rl",
         "https://huggingface.co/datasets/humanoid-vstar/hos-sft",
         "https://huggingface.co/datasets/humanoid-vstar/hps-sft",
     ],
@@ -97,6 +115,7 @@ class ExternalBenchmarkBuildConfig:
     include_thinking_in_360: bool = True
     include_panoenv: bool = True
     panoenv_allowed_question_types: Tuple[str, ...] = ("open_ended",)
+    strip_thinking_in_360_reasoning: bool = False
 
 
 def build_external_benchmark_training_sets(config: ExternalBenchmarkBuildConfig) -> Dict[str, Any]:
@@ -145,8 +164,13 @@ def build_external_benchmark_training_sets(config: ExternalBenchmarkBuildConfig)
 
     thinking_path = config.output_dir / "thinking_in_360_training_multimodal_blocks.json"
     if config.include_thinking_in_360:
-        thinking_items = build_thinking_in_360_training_items(config.cache_dir, config.max_thinking_records)
+        thinking_items = build_thinking_in_360_training_items(
+            config.cache_dir,
+            config.max_thinking_records,
+            strip_reasoning=config.strip_thinking_in_360_reasoning,
+        )
         stats["counts"]["thinking_in_360"] = len(thinking_items)
+        stats["notes"]["thinking_in_360"]["strip_reasoning"] = config.strip_thinking_in_360_reasoning
     else:
         thinking_items = []
         stats["counts"]["thinking_in_360"] = 0
@@ -215,7 +239,11 @@ def build_osr_bench_training_rows(cache_dir: Path, max_records: Optional[int]) -
     return rows
 
 
-def build_thinking_in_360_training_items(cache_dir: Path, max_records: Optional[int]) -> List[Dict[str, Any]]:
+def build_thinking_in_360_training_items(
+    cache_dir: Path,
+    max_records: Optional[int],
+    strip_reasoning: bool,
+) -> List[Dict[str, Any]]:
     dataset_cache = cache_dir / "thinking_in_360"
     dataset_cache.mkdir(parents=True, exist_ok=True)
 
@@ -226,6 +254,7 @@ def build_thinking_in_360_training_items(cache_dir: Path, max_records: Optional[
 
         zip_path = dataset_cache / source["zip_filename"]
         extract_dir = dataset_cache / source["source_name"]
+        mode = str(source.get("mode", "panorama_sft"))
 
         _download_to_path(str(source["zip_url"]), zip_path)
         _extract_zip_once(zip_path, extract_dir)
@@ -238,13 +267,23 @@ def build_thinking_in_360_training_items(cache_dir: Path, max_records: Optional[
             for row_index, row in enumerate(iter_manifest_rows(manifest_path)):
                 if max_records is not None and len(items) >= max_records:
                     break
-                row_items = build_thinking_records(
-                    row=row,
-                    record_index=row_index,
-                    source_name=str(source["source_name"]),
-                    extract_dir=extract_dir,
-                    manifest_path=manifest_path,
-                )
+                if mode == "rl_annotation":
+                    row_items = build_thinking_rl_records(
+                        row=row,
+                        record_index=row_index,
+                        source_name=str(source["source_name"]),
+                        extract_dir=extract_dir,
+                        manifest_path=manifest_path,
+                    )
+                else:
+                    row_items = build_thinking_records(
+                        row=row,
+                        record_index=row_index,
+                        source_name=str(source["source_name"]),
+                        extract_dir=extract_dir,
+                        manifest_path=manifest_path,
+                        strip_reasoning=strip_reasoning,
+                    )
                 if max_records is not None:
                     remaining = max_records - len(items)
                     row_items = row_items[:remaining]
@@ -322,6 +361,7 @@ def build_thinking_records(
     source_name: str,
     extract_dir: Path,
     manifest_path: Optional[Path] = None,
+    strip_reasoning: bool = False,
 ) -> List[Dict[str, Any]]:
     outputs = row.get("outputs")
     if isinstance(outputs, list):
@@ -331,6 +371,7 @@ def build_thinking_records(
             source_name=source_name,
             extract_dir=extract_dir,
             manifest_path=manifest_path,
+            strip_reasoning=strip_reasoning,
         )
 
     item = build_thinking_record(
@@ -338,6 +379,7 @@ def build_thinking_records(
         record_index=record_index,
         source_name=source_name,
         extract_dir=extract_dir,
+        strip_reasoning=strip_reasoning,
     )
     return [item] if item is not None else []
 
@@ -347,6 +389,7 @@ def build_thinking_record(
     record_index: int,
     source_name: str,
     extract_dir: Path,
+    strip_reasoning: bool = False,
 ) -> Optional[Dict[str, Any]]:
     existing_messages = row.get("messages")
     if isinstance(existing_messages, list) and existing_messages:
@@ -355,6 +398,7 @@ def build_thinking_record(
             record_index=record_index,
             source_name=source_name,
             extract_dir=extract_dir,
+            strip_reasoning=strip_reasoning,
         )
 
     conversations = row.get("conversations", [])
@@ -382,6 +426,8 @@ def build_thinking_record(
                 continue
             messages.append({"role": "user", "content": blocks})
             continue
+        if strip_reasoning:
+            value = strip_reasoning_tags(value)
         messages.append({"role": role, "content": [{"type": "text", "text": value}]})
 
     return {
@@ -397,6 +443,7 @@ def build_thinking_records_from_task_outputs(
     source_name: str,
     extract_dir: Path,
     manifest_path: Optional[Path],
+    strip_reasoning: bool,
 ) -> List[Dict[str, Any]]:
     image_paths = resolve_row_images(row, extract_dir, manifest_path=manifest_path)
     if not image_paths:
@@ -413,6 +460,8 @@ def build_thinking_records_from_task_outputs(
         input_angles = output.get("input_angles", [])
         yaw, pitch = normalize_input_angles(input_angles)
         assistant_text = str(output.get("content", "")).strip() or str(output.get("action", "")).strip()
+        if strip_reasoning:
+            assistant_text = strip_reasoning_tags(assistant_text)
         if not assistant_text:
             continue
         user_text = build_thinking_task_prompt(task, yaw, pitch)
@@ -433,6 +482,7 @@ def build_thinking_record_from_messages(
     record_index: int,
     source_name: str,
     extract_dir: Path,
+    strip_reasoning: bool = False,
 ) -> Optional[Dict[str, Any]]:
     resolved_images = resolve_row_images(row, extract_dir)
     messages = row.get("messages", [])
@@ -448,9 +498,14 @@ def build_thinking_record_from_messages(
         if role == "system":
             has_system = True
         if isinstance(content, list):
+            if strip_reasoning and role == "assistant":
+                content = strip_reasoning_blocks(content)
             projected.append({"role": role, "content": content})
         else:
-            projected.append({"role": role, "content": [{"type": "text", "text": str(content or "")}]})
+            text_content = str(content or "")
+            if strip_reasoning and role == "assistant":
+                text_content = strip_reasoning_tags(text_content)
+            projected.append({"role": role, "content": [{"type": "text", "text": text_content}]})
     if not has_system:
         projected.insert(0, {"role": "system", "content": [{"type": "text", "text": ERP_MULTIMODAL_SYSTEM_PROMPT}]})
     return {
@@ -458,6 +513,124 @@ def build_thinking_record_from_messages(
         "messages": projected,
         "images": [str(path) for path in resolved_images],
     }
+
+
+def build_thinking_rl_records(
+    row: Dict[str, Any],
+    record_index: int,
+    source_name: str,
+    extract_dir: Path,
+    manifest_path: Path,
+) -> List[Dict[str, Any]]:
+    if not isinstance(row, dict):
+        return []
+    image_paths = select_rl_image_paths(manifest_path.parent)
+    if not image_paths:
+        return []
+
+    task = str(row.get("task", "")).strip()
+    initial_yaws = row.get("initial yaw", [])
+    overlaps = row.get("overlap_rate", [])
+    levels = row.get("level", [])
+    if not isinstance(initial_yaws, list) or not initial_yaws:
+        return []
+
+    best_index = choose_best_rl_initial_view(initial_yaws, overlaps, levels)
+    best_yaw = initial_yaws[best_index]
+    best_overlap = overlaps[best_index] if isinstance(overlaps, list) and best_index < len(overlaps) else None
+    best_level = levels[best_index] if isinstance(levels, list) and best_index < len(levels) else None
+
+    prompt = (
+        f"Task: {task or 'Complete the visual search task.'}\n"
+        f"The image is a full ERP panorama. Candidate initial yaw angles are: {', '.join(str(v) for v in initial_yaws)} degrees.\n"
+        "Which initial yaw is the best starting view for this task? Reply with one yaw angle only."
+    )
+    answer = f"{best_yaw}"
+    if best_overlap is not None or best_level is not None:
+        answer = (
+            f"{best_yaw} degrees"
+            + (f" (overlap_rate={best_overlap}" if best_overlap is not None else "")
+            + (f", level={best_level})" if best_level is not None else (")" if best_overlap is not None else ""))
+        )
+    return [
+        build_single_turn_training_item(
+            record_id=f"thinking_in_360:{source_name}:{record_index:06d}",
+            question=prompt,
+            answer=answer,
+            image_paths=image_paths,
+            system_prompt=ERP_MULTIMODAL_SYSTEM_PROMPT,
+        )
+    ]
+
+
+def select_rl_image_paths(sample_dir: Path) -> List[Path]:
+    image_candidates = sorted(
+        list(sample_dir.glob("*.jpg"))
+        + list(sample_dir.glob("*.jpeg"))
+        + list(sample_dir.glob("*.png"))
+        + list(sample_dir.glob("*.webp"))
+    )
+    if not image_candidates:
+        return []
+
+    def priority(path: Path) -> Tuple[int, str]:
+        name = path.name.lower()
+        if name.startswith("pano_"):
+            return (0, name)
+        if name.startswith("keyframe_"):
+            return (1, name)
+        if name.startswith("frame_"):
+            return (2, name)
+        return (3, name)
+
+    best = sorted(image_candidates, key=priority)[0]
+    return [best]
+
+
+def choose_best_rl_initial_view(initial_yaws: Sequence[Any], overlaps: Any, levels: Any) -> int:
+    overlap_list = list(overlaps) if isinstance(overlaps, (list, tuple)) else []
+    level_list = list(levels) if isinstance(levels, (list, tuple)) else []
+    best_index = 0
+    best_key: Optional[Tuple[float, float, int]] = None
+
+    for index, _ in enumerate(initial_yaws):
+        overlap_value = overlap_list[index] if index < len(overlap_list) else float("-inf")
+        level_value = level_list[index] if index < len(level_list) else float("inf")
+        try:
+            overlap_float = float(overlap_value)
+        except Exception:
+            overlap_float = float("-inf")
+        try:
+            level_float = float(level_value)
+        except Exception:
+            level_float = float("inf")
+        candidate_key = (overlap_float, -level_float, -index)
+        if best_key is None or candidate_key > best_key:
+            best_index = index
+            best_key = candidate_key
+    return best_index
+
+
+def strip_reasoning_tags(text: str) -> str:
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"<action>(.*?)</action>", r"\1", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"</?answer>", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def strip_reasoning_blocks(content_blocks: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    cleaned_blocks: List[Dict[str, Any]] = []
+    for block in content_blocks:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") != "text":
+            cleaned_blocks.append(dict(block))
+            continue
+        new_block = dict(block)
+        new_block["text"] = strip_reasoning_tags(str(block.get("text", "")))
+        cleaned_blocks.append(new_block)
+    return cleaned_blocks
 
 
 def build_panoenv_training_items_from_row(

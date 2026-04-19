@@ -246,20 +246,33 @@ python3 /Users/wcp/code/erp_data_pipeline/data_merge/scripts/build_external_benc
 
 Default behavior:
 
-- `thinking_in_360_training_multimodal_blocks.json`: exported by default from the official panorama SFT releases.
+- `thinking_in_360_training_multimodal_blocks.json`: exported by default from the official panorama SFT releases plus the official RL train packages converted into panorama-native SFT supervision.
 - `panoenv_training_multimodal_blocks.json`: exported by default, because PanoEnv has an official train split and is panorama-native.
 - `osr_bench_train_multimodal_blocks.json`: written by explicit opt-in only.
 - `osr_bench_validation_multimodal_blocks.json`: written by explicit opt-in only.
 - `osr_bench_test_multimodal_blocks.json`: written by explicit opt-in only.
 
+Thinking in 360 details:
+
+- The default export uses the official panorama SFT releases `hos_sft_panorama` and `hps_sft_panorama`, which contain ERP panoramas rather than narrow-FoV perspective crops.
+- It also converts the official RL train packages `hos_train.zip` and `hps_train.zip` from `humanoid-vstar/hvs_rl` into SFT-style items by asking the model to choose the best initial yaw from the candidate starting views.
+- By default the assistant output is kept as released, including `<think>...</think>` traces when present. If you want answer-only supervision, add `--strip-thinking-in-360-reasoning`.
+
 The OSR-Bench files are empty by default on purpose:
 
 - OSR-Bench is mainly a benchmark release. The public package exposes images plus one `qa.csv`, but no official QA train split. If you force-convert it for training, benchmark evaluation on OSR-Bench is no longer clean.
+- If you explicitly opt in, the converter applies a deterministic image-source-isolated split, so all QA from the same panorama stay inside exactly one split.
+
+PanoEnv details:
+
+- The official train split is about 415 panorama images and 10,340 QA pairs.
+- The default exporter keeps only `open_ended` questions as a simple quality filter for higher-signal SFT data.
+- You can widen that filter with `--panoenv-question-types open_ended,multiple_choice,true_false`.
 
 The converter uses official sources only:
 
 - OSR-Bench: official `qa.csv` plus the benchmark images from [UUUserna/OSR-Bench](https://huggingface.co/datasets/UUUserna/OSR-Bench)
-- Thinking in 360: the official panorama SFT releases [humanoid-vstar/hos_sft_panorama](https://huggingface.co/datasets/humanoid-vstar/hos_sft_panorama) and [humanoid-vstar/hps_sft_panorama](https://huggingface.co/datasets/humanoid-vstar/hps_sft_panorama)
+- Thinking in 360: the official panorama SFT releases [humanoid-vstar/hos_sft_panorama](https://huggingface.co/datasets/humanoid-vstar/hos_sft_panorama), [humanoid-vstar/hps_sft_panorama](https://huggingface.co/datasets/humanoid-vstar/hps_sft_panorama), and the official RL train package [humanoid-vstar/hvs_rl](https://huggingface.co/datasets/humanoid-vstar/hvs_rl)
 - PanoEnv: the official train split loaded through [7zkk/PanoEnv](https://huggingface.co/datasets/7zkk/PanoEnv) or [guangmulizi/PanoEnv](https://huggingface.co/datasets/guangmulizi/PanoEnv)
 
 Important training notes:
