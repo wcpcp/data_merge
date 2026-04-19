@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import shutil
 import tempfile
@@ -18,22 +19,16 @@ OSR_BENCH_IMAGE_BASE_URL = "https://huggingface.co/datasets/UUUserna/OSR-Bench/r
 
 THINKING_IN_360_SOURCES = (
     {
-        "source_name": "hos_sft",
-        "display_name": "Thinking in 360 / HOS-SFT",
-        "jsonl_url": "https://huggingface.co/datasets/humanoid-vstar/hos-sft/resolve/main/hos_sft_sharegpt.jsonl?download=true",
-        "zip_url": "https://huggingface.co/datasets/humanoid-vstar/hos-sft/resolve/main/hos_sft_sharegpt.zip?download=true",
-        "jsonl_filename": "hos_sft_sharegpt.jsonl",
-        "zip_filename": "hos_sft_sharegpt.zip",
-        "relative_root": "hos_sft_sharegpt",
+        "source_name": "hos_sft_panorama",
+        "display_name": "Thinking in 360 / HOS-SFT Panorama",
+        "zip_url": "https://huggingface.co/datasets/humanoid-vstar/hos_sft_panorama/resolve/main/hos_sft_panorama.zip?download=true",
+        "zip_filename": "hos_sft_panorama.zip",
     },
     {
-        "source_name": "hps_sft",
-        "display_name": "Thinking in 360 / HPS-SFT",
-        "jsonl_url": "https://huggingface.co/datasets/humanoid-vstar/hps-sft/resolve/main/hps_sft_sharegpt.jsonl?download=true",
-        "zip_url": "https://huggingface.co/datasets/humanoid-vstar/hps-sft/resolve/main/hps_sft_sharegpt.zip?download=true",
-        "jsonl_filename": "hps_sft_sharegpt.jsonl",
-        "zip_filename": "hps_sft_sharegpt.zip",
-        "relative_root": "hps_sft_sharegpt",
+        "source_name": "hps_sft_panorama",
+        "display_name": "Thinking in 360 / HPS-SFT Panorama",
+        "zip_url": "https://huggingface.co/datasets/humanoid-vstar/hps_sft_panorama/resolve/main/hps_sft_pano.zip?download=true",
+        "zip_filename": "hps_sft_pano.zip",
     },
 )
 
@@ -58,17 +53,18 @@ OSR_BENCH_NOTES = {
 
 THINKING_IN_360_NOTES = {
     "official_training_data_available": True,
-    "recommended_for_panorama_training": False,
+    "recommended_for_panorama_training": True,
     "conversion_supported_with_opt_in": True,
     "benchmark_safe_for_same_benchmark": True,
     "summary": (
-        "The official HOS-SFT and HPS-SFT releases are real SFT corpora, but the released observations are "
-        "narrow-FoV perspective views sampled from a 360 panorama rather than ERP panoramas themselves. "
-        "That makes them misaligned with a panorama-native foundation model unless you explicitly want mixed "
-        "perspective+ERP training."
+        "Use the official panorama SFT releases for training. They align with panorama-native modeling better than "
+        "the older perspective-view HOS/HPS SFT dumps. There is no need to fall back to the RL trajectories unless "
+        "the panorama SFT package becomes unavailable."
     ),
     "official_sources": [
         "https://humanoid-vstar.github.io/",
+        "https://huggingface.co/datasets/humanoid-vstar/hos_sft_panorama",
+        "https://huggingface.co/datasets/humanoid-vstar/hps_sft_panorama",
         "https://huggingface.co/datasets/humanoid-vstar/hos-sft",
         "https://huggingface.co/datasets/humanoid-vstar/hps-sft",
     ],
@@ -98,8 +94,9 @@ class ExternalBenchmarkBuildConfig:
     max_thinking_records: Optional[int] = None
     max_panoenv_records: Optional[int] = None
     include_osr_bench: bool = False
-    include_thinking_in_360: bool = False
+    include_thinking_in_360: bool = True
     include_panoenv: bool = True
+    panoenv_allowed_question_types: Tuple[str, ...] = ("open_ended",)
 
 
 def build_external_benchmark_training_sets(config: ExternalBenchmarkBuildConfig) -> Dict[str, Any]:
@@ -118,16 +115,33 @@ def build_external_benchmark_training_sets(config: ExternalBenchmarkBuildConfig)
         },
     }
 
-    osr_path = config.output_dir / "osr_bench_training_multimodal_blocks.json"
+    osr_train_path = config.output_dir / "osr_bench_train_multimodal_blocks.json"
+    osr_val_path = config.output_dir / "osr_bench_validation_multimodal_blocks.json"
+    osr_test_path = config.output_dir / "osr_bench_test_multimodal_blocks.json"
     if config.include_osr_bench:
-        osr_items = build_osr_bench_training_items(config.cache_dir, config.max_osr_records)
-        stats["counts"]["osr_bench"] = len(osr_items)
+        osr_rows = build_osr_bench_training_rows(config.cache_dir, config.max_osr_records)
+        osr_split = split_grouped_training_rows(osr_rows)
+        stats["counts"]["osr_bench"] = {
+            "train": len(osr_split["train"]),
+            "validation": len(osr_split["validation"]),
+            "test": len(osr_split["test"]),
+            "total": sum(len(rows) for rows in osr_split.values()),
+            "unique_images": len({group_id for group_id, _ in osr_rows}),
+        }
+        _write_json(osr_train_path, osr_split["train"])
+        _write_json(osr_val_path, osr_split["validation"])
+        _write_json(osr_test_path, osr_split["test"])
     else:
-        osr_items = []
-        stats["counts"]["osr_bench"] = 0
+        stats["counts"]["osr_bench"] = {"train": 0, "validation": 0, "test": 0, "total": 0, "unique_images": 0}
         stats["notes"]["osr_bench"]["export_status"] = "skipped_by_default_because_no_official_training_split"
-    _write_json(osr_path, osr_items)
-    stats["files"]["osr_bench"] = str(osr_path)
+        _write_json(osr_train_path, [])
+        _write_json(osr_val_path, [])
+        _write_json(osr_test_path, [])
+    stats["files"]["osr_bench"] = {
+        "train": str(osr_train_path),
+        "validation": str(osr_val_path),
+        "test": str(osr_test_path),
+    }
 
     thinking_path = config.output_dir / "thinking_in_360_training_multimodal_blocks.json"
     if config.include_thinking_in_360:
@@ -136,15 +150,22 @@ def build_external_benchmark_training_sets(config: ExternalBenchmarkBuildConfig)
     else:
         thinking_items = []
         stats["counts"]["thinking_in_360"] = 0
-        stats["notes"]["thinking_in_360"]["export_status"] = "skipped_by_default_because_public_sft_is_perspective_only"
+        stats["notes"]["thinking_in_360"]["export_status"] = "skipped_by_request"
     _write_json(thinking_path, thinking_items)
     stats["files"]["thinking_in_360"] = str(thinking_path)
 
     panoenv_path = config.output_dir / "panoenv_training_multimodal_blocks.json"
     if config.include_panoenv:
-        panoenv_items, dataset_name = build_panoenv_training_items(config.cache_dir, config.max_panoenv_records)
-        stats["counts"]["panoenv"] = len(panoenv_items)
-        stats["notes"]["panoenv"]["resolved_dataset"] = dataset_name
+        panoenv_items, panoenv_stats = build_panoenv_training_items(
+            config.cache_dir,
+            config.max_panoenv_records,
+            allowed_question_types=config.panoenv_allowed_question_types,
+        )
+        stats["counts"]["panoenv"] = panoenv_stats
+        stats["notes"]["panoenv"]["resolved_dataset"] = panoenv_stats["resolved_dataset"]
+        stats["notes"]["panoenv"]["quality_filter"] = {
+            "allowed_question_types": list(config.panoenv_allowed_question_types),
+        }
     else:
         panoenv_items = []
         stats["counts"]["panoenv"] = 0
@@ -158,17 +179,17 @@ def build_external_benchmark_training_sets(config: ExternalBenchmarkBuildConfig)
     return stats
 
 
-def build_osr_bench_training_items(cache_dir: Path, max_records: Optional[int]) -> List[Dict[str, Any]]:
+def build_osr_bench_training_rows(cache_dir: Path, max_records: Optional[int]) -> List[Tuple[str, Dict[str, Any]]]:
     dataset_cache = cache_dir / "osr_bench"
     dataset_cache.mkdir(parents=True, exist_ok=True)
     qa_csv_path = dataset_cache / "qa.csv"
     _download_to_path(OSR_BENCH_QA_URL, qa_csv_path)
 
-    items: List[Dict[str, Any]] = []
+    rows: List[Tuple[str, Dict[str, Any]]] = []
     with qa_csv_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         for row_index, row in enumerate(reader):
-            if max_records is not None and len(items) >= max_records:
+            if max_records is not None and len(rows) >= max_records:
                 break
             image_id = str(row.get("image_id", "")).strip()
             question = str(row.get("question", "")).strip()
@@ -177,16 +198,21 @@ def build_osr_bench_training_items(cache_dir: Path, max_records: Optional[int]) 
                 continue
             image_path = dataset_cache / image_id
             _download_to_path(f"{OSR_BENCH_IMAGE_BASE_URL}/{image_id}?download=true", image_path)
-            items.append(
-                build_single_turn_training_item(
-                    record_id=f"osr_bench:{safe_id(Path(image_id).with_suffix('').as_posix())}:{row.get('turn_id', row_index)}",
-                    question=question,
-                    answer=answer,
-                    image_paths=[image_path],
-                    system_prompt=ERP_MULTIMODAL_SYSTEM_PROMPT,
+            group_id = safe_id(Path(image_id).with_suffix("").as_posix())
+            item = build_single_turn_training_item(
+                record_id=f"osr_bench:{group_id}:{row.get('turn_id', row_index)}",
+                question=question,
+                answer=answer,
+                image_paths=[image_path],
+                system_prompt=ERP_MULTIMODAL_SYSTEM_PROMPT,
+            )
+            rows.append(
+                (
+                    group_id,
+                    item,
                 )
             )
-    return items
+    return rows
 
 
 def build_thinking_in_360_training_items(cache_dir: Path, max_records: Optional[int]) -> List[Dict[str, Any]]:
@@ -198,51 +224,69 @@ def build_thinking_in_360_training_items(cache_dir: Path, max_records: Optional[
         if max_records is not None and len(items) >= max_records:
             break
 
-        jsonl_path = dataset_cache / source["jsonl_filename"]
         zip_path = dataset_cache / source["zip_filename"]
         extract_dir = dataset_cache / source["source_name"]
 
-        _download_to_path(str(source["jsonl_url"]), jsonl_path)
         _download_to_path(str(source["zip_url"]), zip_path)
         _extract_zip_once(zip_path, extract_dir)
 
-        with jsonl_path.open("r", encoding="utf-8") as handle:
-            for row_index, line in enumerate(handle):
+        manifest_paths = discover_manifest_paths(extract_dir)
+        if not manifest_paths:
+            raise RuntimeError(f"No JSON/JSONL manifest found after extracting {zip_path}")
+
+        for manifest_path in manifest_paths:
+            for row_index, row in enumerate(iter_manifest_rows(manifest_path)):
                 if max_records is not None and len(items) >= max_records:
                     break
-                line = line.strip()
-                if not line:
-                    continue
-                row = json.loads(line)
-                item = build_thinking_record(
+                row_items = build_thinking_records(
                     row=row,
                     record_index=row_index,
                     source_name=str(source["source_name"]),
                     extract_dir=extract_dir,
+                    manifest_path=manifest_path,
                 )
-                if item is not None:
-                    items.append(item)
+                if max_records is not None:
+                    remaining = max_records - len(items)
+                    row_items = row_items[:remaining]
+                items.extend(row_items)
     return items
 
 
-def build_panoenv_training_items(cache_dir: Path, max_records: Optional[int]) -> Tuple[List[Dict[str, Any]], str]:
+def build_panoenv_training_items(
+    cache_dir: Path,
+    max_records: Optional[int],
+    allowed_question_types: Sequence[str],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     dataset_name, train_split = load_panoenv_train_split()
     dataset_cache = cache_dir / "panoenv"
     image_cache = dataset_cache / "images"
     image_cache.mkdir(parents=True, exist_ok=True)
 
     items: List[Dict[str, Any]] = []
+    image_count = 0
+    raw_question_count = 0
     for row in train_split:
         if max_records is not None and len(items) >= max_records:
             break
+        image_count += 1
+        raw_question_count += len(row.get("questions", [])) if isinstance(row.get("questions"), list) else 0
         image_path = save_panoenv_row_image(row, image_cache)
-        row_items = build_panoenv_training_items_from_row(row, image_path)
+        row_items = build_panoenv_training_items_from_row(
+            row,
+            image_path,
+            allowed_question_types=set(allowed_question_types),
+        )
         if max_records is not None:
             remaining = max_records - len(items)
             row_items = row_items[:remaining]
         items.extend(row_items)
 
-    return items, dataset_name
+    return items, {
+        "filtered_export_count": len(items),
+        "scanned_image_count": image_count,
+        "raw_question_count_seen": raw_question_count,
+        "resolved_dataset": dataset_name,
+    }
 
 
 def build_single_turn_training_item(
@@ -272,26 +316,54 @@ def build_single_turn_training_item(
     }
 
 
+def build_thinking_records(
+    row: Dict[str, Any],
+    record_index: int,
+    source_name: str,
+    extract_dir: Path,
+    manifest_path: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    outputs = row.get("outputs")
+    if isinstance(outputs, list):
+        return build_thinking_records_from_task_outputs(
+            row=row,
+            record_index=record_index,
+            source_name=source_name,
+            extract_dir=extract_dir,
+            manifest_path=manifest_path,
+        )
+
+    item = build_thinking_record(
+        row=row,
+        record_index=record_index,
+        source_name=source_name,
+        extract_dir=extract_dir,
+    )
+    return [item] if item is not None else []
+
+
 def build_thinking_record(
     row: Dict[str, Any],
     record_index: int,
     source_name: str,
     extract_dir: Path,
 ) -> Optional[Dict[str, Any]]:
+    existing_messages = row.get("messages")
+    if isinstance(existing_messages, list) and existing_messages:
+        return build_thinking_record_from_messages(
+            row=row,
+            record_index=record_index,
+            source_name=source_name,
+            extract_dir=extract_dir,
+        )
+
     conversations = row.get("conversations", [])
     if not isinstance(conversations, list) or not conversations:
         return None
 
-    raw_images = row.get("images", [])
-    if not isinstance(raw_images, list) or not raw_images:
+    resolved_images = resolve_row_images(row, extract_dir)
+    if not resolved_images:
         return None
-
-    resolved_images: List[Path] = []
-    for raw_image in raw_images:
-        resolved = resolve_extracted_image_path(extract_dir, str(raw_image))
-        if resolved is None:
-            raise FileNotFoundError(f"missing extracted image for Thinking in 360 sample: {raw_image}")
-        resolved_images.append(resolved)
 
     system_prompt = str(row.get("system", "")).strip() or ERP_MULTIMODAL_SYSTEM_PROMPT
     messages = [{"role": "system", "content": [{"type": "text", "text": system_prompt}]}]
@@ -319,7 +391,80 @@ def build_thinking_record(
     }
 
 
-def build_panoenv_training_items_from_row(row: Dict[str, Any], image_path: Path) -> List[Dict[str, Any]]:
+def build_thinking_records_from_task_outputs(
+    row: Dict[str, Any],
+    record_index: int,
+    source_name: str,
+    extract_dir: Path,
+    manifest_path: Optional[Path],
+) -> List[Dict[str, Any]]:
+    image_paths = resolve_row_images(row, extract_dir, manifest_path=manifest_path)
+    if not image_paths:
+        return []
+    task = str(row.get("task", "")).strip()
+    outputs = row.get("outputs", [])
+    if not isinstance(outputs, list):
+        return []
+
+    items: List[Dict[str, Any]] = []
+    for output_index, output in enumerate(outputs):
+        if not isinstance(output, dict):
+            continue
+        input_angles = output.get("input_angles", [])
+        yaw, pitch = normalize_input_angles(input_angles)
+        assistant_text = str(output.get("content", "")).strip() or str(output.get("action", "")).strip()
+        if not assistant_text:
+            continue
+        user_text = build_thinking_task_prompt(task, yaw, pitch)
+        items.append(
+            build_single_turn_training_item(
+                record_id=f"thinking_in_360:{source_name}:{record_index:06d}:step{output_index:03d}",
+                question=user_text,
+                answer=assistant_text,
+                image_paths=image_paths,
+                system_prompt=ERP_MULTIMODAL_SYSTEM_PROMPT,
+            )
+        )
+    return items
+
+
+def build_thinking_record_from_messages(
+    row: Dict[str, Any],
+    record_index: int,
+    source_name: str,
+    extract_dir: Path,
+) -> Optional[Dict[str, Any]]:
+    resolved_images = resolve_row_images(row, extract_dir)
+    messages = row.get("messages", [])
+    if not isinstance(messages, list) or not messages:
+        return None
+    projected = []
+    has_system = False
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role", "")).strip()
+        content = message.get("content")
+        if role == "system":
+            has_system = True
+        if isinstance(content, list):
+            projected.append({"role": role, "content": content})
+        else:
+            projected.append({"role": role, "content": [{"type": "text", "text": str(content or "")}]})
+    if not has_system:
+        projected.insert(0, {"role": "system", "content": [{"type": "text", "text": ERP_MULTIMODAL_SYSTEM_PROMPT}]})
+    return {
+        "id": str(row.get("id", f"thinking_in_360:{source_name}:{record_index:06d}")),
+        "messages": projected,
+        "images": [str(path) for path in resolved_images],
+    }
+
+
+def build_panoenv_training_items_from_row(
+    row: Dict[str, Any],
+    image_path: Path,
+    allowed_question_types: Optional[set[str]] = None,
+) -> List[Dict[str, Any]]:
     env_name = str(row.get("env", "")).strip()
     image_id = str(row.get("image_id", "")).strip()
     questions = row.get("questions", [])
@@ -329,6 +474,9 @@ def build_panoenv_training_items_from_row(row: Dict[str, Any], image_path: Path)
     items: List[Dict[str, Any]] = []
     for question_entry in questions:
         if not isinstance(question_entry, dict):
+            continue
+        question_type = str(question_entry.get("question_type", "")).strip()
+        if allowed_question_types is not None and question_type not in allowed_question_types:
             continue
         question_text = str(question_entry.get("question", "")).strip()
         answer_text = stringify_answer(question_entry.get("answer"))
@@ -451,6 +599,32 @@ def sharegpt_user_text_to_blocks(text: str, image_count: int, first_user_message
     return blocks
 
 
+def resolve_row_images(row: Dict[str, Any], extract_dir: Path, manifest_path: Optional[Path] = None) -> List[Path]:
+    raw_images = row.get("images")
+    if isinstance(raw_images, list):
+        image_values = [str(item) for item in raw_images if str(item).strip()]
+    else:
+        image_value = str(row.get("image", "")).strip()
+        image_values = [image_value] if image_value else []
+
+    if not image_values and manifest_path is not None:
+        sibling_images = sorted(
+            list(manifest_path.parent.glob("*.jpg"))
+            + list(manifest_path.parent.glob("*.jpeg"))
+            + list(manifest_path.parent.glob("*.png"))
+            + list(manifest_path.parent.glob("*.webp"))
+        )
+        return sibling_images
+
+    resolved_images: List[Path] = []
+    for raw_image in image_values:
+        resolved = resolve_extracted_image_path(extract_dir, raw_image)
+        if resolved is None:
+            raise FileNotFoundError(f"missing extracted image for Thinking in 360 sample: {raw_image}")
+        resolved_images.append(resolved)
+    return resolved_images
+
+
 def resolve_extracted_image_path(extract_dir: Path, relative_path: str) -> Optional[Path]:
     relative = Path(relative_path)
     direct = extract_dir / relative
@@ -459,7 +633,81 @@ def resolve_extracted_image_path(extract_dir: Path, relative_path: str) -> Optio
     nested = extract_dir / relative.name
     if nested.exists():
         return nested
+    candidates = list(extract_dir.rglob(relative.name))
+    if candidates:
+        return candidates[0]
     return None
+
+
+def discover_manifest_paths(extract_dir: Path) -> List[Path]:
+    manifests = sorted(path for path in extract_dir.rglob("*.jsonl") if path.is_file())
+    if manifests:
+        return manifests
+    return sorted(path for path in extract_dir.rglob("*.json") if path.is_file() and path.name != ".complete")
+
+
+def iter_manifest_rows(path: Path) -> Iterable[Dict[str, Any]]:
+    if path.suffix.lower() == ".jsonl":
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                if isinstance(row, dict):
+                    yield row
+        return
+
+    with path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if isinstance(payload, list):
+        for row in payload:
+            if isinstance(row, dict):
+                yield row
+        return
+    if isinstance(payload, dict):
+        for key in ("data", "items", "records", "rows", "samples"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                for row in value:
+                    if isinstance(row, dict):
+                        yield row
+                return
+
+
+def split_grouped_training_rows(rows: Sequence[Tuple[str, Dict[str, Any]]]) -> Dict[str, List[Dict[str, Any]]]:
+    split_rows = {"train": [], "validation": [], "test": []}
+    for group_id, item in rows:
+        split_name = assign_group_to_split(group_id)
+        split_rows[split_name].append(item)
+    return split_rows
+
+
+def assign_group_to_split(group_id: str) -> str:
+    value = int(hashlib.md5(group_id.encode("utf-8")).hexdigest()[:8], 16) % 11
+    if value < 9:
+        return "train"
+    if value == 9:
+        return "validation"
+    return "test"
+
+
+def normalize_input_angles(value: Any) -> Tuple[float, float]:
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        try:
+            return float(value[0]), float(value[1])
+        except Exception:
+            return 0.0, 0.0
+    return 0.0, 0.0
+
+
+def build_thinking_task_prompt(task: str, yaw: float, pitch: float) -> str:
+    task_text = task.strip() if task.strip() else "Complete the visual search task."
+    return (
+        f"Task: {task_text}\n"
+        f"The image is a full ERP panorama. The current virtual view center is at yaw={yaw:g} degrees and pitch={pitch:g} degrees.\n"
+        "Decide the next action for this task."
+    )
 
 
 def stringify_answer(value: Any) -> str:

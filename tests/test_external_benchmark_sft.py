@@ -16,9 +16,11 @@ if str(SRC) not in sys.path:
 from data_merge.external_benchmark_sft import (
     ERP_MULTIMODAL_SYSTEM_PROMPT,
     ExternalBenchmarkBuildConfig,
+    assign_group_to_split,
     build_external_benchmark_training_sets,
     build_panoenv_training_items_from_row,
     build_single_turn_training_item,
+    build_thinking_records,
     build_thinking_record,
     sharegpt_user_text_to_blocks,
 )
@@ -90,6 +92,38 @@ class ExternalBenchmarkSftTest(unittest.TestCase):
         self.assertIn("move_forward", item["messages"][2]["content"][0]["text"])
         self.assertEqual(item["images"], [str(image_path)])
 
+    def test_build_thinking_records_from_panorama_sft_json(self) -> None:
+        extract_dir = self.temp_dir / "thinking_pano"
+        manifest_dir = extract_dir / "hos_sft_panorama" / "135"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        image_path = manifest_dir / "frame_0001.jpg"
+        image_path.write_bytes(b"demo")
+        manifest_path = manifest_dir / "sft.json"
+        manifest_path.write_text("[]", encoding="utf-8")
+
+        items = build_thinking_records(
+            row={
+                "task": "Find the supermarket exit",
+                "outputs": [
+                    {
+                        "input_angles": [180, 0],
+                        "content": "<think>Look toward the door.</think><action>rotate(45,0)</action>",
+                        "action": "rotate(45,0)",
+                    }
+                ],
+            },
+            record_index=7,
+            source_name="hos_sft_panorama",
+            extract_dir=extract_dir,
+            manifest_path=manifest_path,
+        )
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["id"], "thinking_in_360:hos_sft_panorama:000007:step000")
+        self.assertIn("yaw=180", items[0]["messages"][1]["content"][0]["text"])
+        self.assertIn("rotate(45,0)", items[0]["messages"][2]["content"][0]["text"])
+        self.assertEqual(items[0]["images"], [str(image_path)])
+
     def test_build_panoenv_training_items_from_row(self) -> None:
         image_path = self.temp_dir / "panoenv.jpg"
         image_path.write_bytes(b"demo")
@@ -100,23 +134,25 @@ class ExternalBenchmarkSftTest(unittest.TestCase):
                 "questions": [
                     {
                         "question_id": 1,
+                        "question_type": "open_ended",
                         "question": "What is the environment type?",
                         "answer": "abandoned cable site",
                     },
                     {
                         "question_id": 2,
+                        "question_type": "multiple_choice",
                         "question": "How many doors are visible?",
                         "answer": 3,
                     },
                 ],
             },
             image_path=image_path,
+            allowed_question_types={"open_ended"},
         )
 
-        self.assertEqual(len(items), 2)
+        self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["id"], "panoenv:AbandonedCable:P000_001500:q1")
         self.assertEqual(items[0]["messages"][1]["content"][0]["text"], "What is the environment type?")
-        self.assertEqual(items[1]["messages"][2]["content"][0]["text"], "3")
         self.assertEqual(items[0]["images"], [str(image_path)])
 
     def test_build_external_benchmark_training_sets_writes_empty_files_for_skipped_sources(self) -> None:
@@ -132,14 +168,22 @@ class ExternalBenchmarkSftTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(stats["counts"]["osr_bench"], 0)
+        self.assertEqual(stats["counts"]["osr_bench"]["total"], 0)
         self.assertEqual(stats["counts"]["thinking_in_360"], 0)
         self.assertEqual(stats["counts"]["panoenv"], 0)
         self.assertIn("skipped_by_default", stats["notes"]["osr_bench"]["export_status"])
-        self.assertIn("perspective_only", stats["notes"]["thinking_in_360"]["export_status"])
-        self.assertEqual(json_load(output_dir / "osr_bench_training_multimodal_blocks.json"), [])
+        self.assertEqual(stats["notes"]["thinking_in_360"]["export_status"], "skipped_by_request")
+        self.assertEqual(json_load(output_dir / "osr_bench_train_multimodal_blocks.json"), [])
+        self.assertEqual(json_load(output_dir / "osr_bench_validation_multimodal_blocks.json"), [])
+        self.assertEqual(json_load(output_dir / "osr_bench_test_multimodal_blocks.json"), [])
         self.assertEqual(json_load(output_dir / "thinking_in_360_training_multimodal_blocks.json"), [])
         self.assertEqual(json_load(output_dir / "panoenv_training_multimodal_blocks.json"), [])
+
+    def test_assign_group_to_split_is_deterministic(self) -> None:
+        split_a = assign_group_to_split("image_a")
+        split_b = assign_group_to_split("image_a")
+        self.assertEqual(split_a, split_b)
+        self.assertIn(split_a, {"train", "validation", "test"})
 
 
 def json_load(path: Path):

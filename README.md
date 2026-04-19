@@ -230,7 +230,9 @@ Example output structure:
 
 You can also collect three external 360-degree training corpora and export them in the same `multimodal_blocks` chat format:
 
-- `osr_bench_training_multimodal_blocks.json`
+- `osr_bench_train_multimodal_blocks.json`
+- `osr_bench_validation_multimodal_blocks.json`
+- `osr_bench_test_multimodal_blocks.json`
 - `thinking_in_360_training_multimodal_blocks.json`
 - `panoenv_training_multimodal_blocks.json`
 
@@ -244,26 +246,27 @@ python3 /Users/wcp/code/erp_data_pipeline/data_merge/scripts/build_external_benc
 
 Default behavior:
 
+- `thinking_in_360_training_multimodal_blocks.json`: exported by default from the official panorama SFT releases.
 - `panoenv_training_multimodal_blocks.json`: exported by default, because PanoEnv has an official train split and is panorama-native.
-- `osr_bench_training_multimodal_blocks.json`: written as an empty list by default.
-- `thinking_in_360_training_multimodal_blocks.json`: written as an empty list by default.
+- `osr_bench_train_multimodal_blocks.json`: written by explicit opt-in only.
+- `osr_bench_validation_multimodal_blocks.json`: written by explicit opt-in only.
+- `osr_bench_test_multimodal_blocks.json`: written by explicit opt-in only.
 
-The last two are empty by default on purpose:
+The OSR-Bench files are empty by default on purpose:
 
 - OSR-Bench is mainly a benchmark release. The public package exposes images plus one `qa.csv`, but no official QA train split. If you force-convert it for training, benchmark evaluation on OSR-Bench is no longer clean.
-- Thinking in 360 does release trainable SFT corpora, but the released observations are narrow-FoV perspective views sampled from panoramas rather than ERP panoramas themselves. For a panorama-native base model, that is not a default fit.
 
 The converter uses official sources only:
 
 - OSR-Bench: official `qa.csv` plus the benchmark images from [UUUserna/OSR-Bench](https://huggingface.co/datasets/UUUserna/OSR-Bench)
-- Thinking in 360: the official SFT releases [humanoid-vstar/hos-sft](https://huggingface.co/datasets/humanoid-vstar/hos-sft) and [humanoid-vstar/hps-sft](https://huggingface.co/datasets/humanoid-vstar/hps-sft)
+- Thinking in 360: the official panorama SFT releases [humanoid-vstar/hos_sft_panorama](https://huggingface.co/datasets/humanoid-vstar/hos_sft_panorama) and [humanoid-vstar/hps_sft_panorama](https://huggingface.co/datasets/humanoid-vstar/hps_sft_panorama)
 - PanoEnv: the official train split loaded through [7zkk/PanoEnv](https://huggingface.co/datasets/7zkk/PanoEnv) or [guangmulizi/PanoEnv](https://huggingface.co/datasets/guangmulizi/PanoEnv)
 
 Important training notes:
 
-- OSR-Bench can be force-converted into training data, but the public release does not expose a clean QA train split. If you train on all of it, your OSR-Bench evaluation is no longer clean.
-- Thinking in 360 should only be force-exported if you explicitly want to mix perspective-view supervision into your panorama model.
-- PanoEnv should use only the official `train` split for training. Validation and test should remain untouched.
+- OSR-Bench can be force-converted into training data, but the public release does not expose a clean QA train split. If you enable it, the exporter creates deterministic `9:1:1` train/validation/test splits at the image-source level so all questions from the same panorama stay in the same split.
+- Thinking in 360 now uses the official panorama SFT releases rather than the older perspective-view SFT dumps.
+- PanoEnv uses only the official `train` split and, by default, keeps only `open_ended` questions as a higher-quality subset.
 
 The script writes a companion `external_benchmark_stats.json` file with these notes and per-file counts.
 
@@ -272,8 +275,9 @@ Useful options:
 - `--max-osr-records N`
 - `--max-thinking-records N`
 - `--max-panoenv-records N`
+- `--panoenv-question-types open_ended`
 - `--include-osr-bench`
-- `--include-thinking-in-360`
+- `--skip-thinking-in-360`
 - `--skip-panoenv`
 
 Example smoke test:
@@ -289,9 +293,10 @@ python3 /Users/wcp/code/erp_data_pipeline/data_merge/scripts/build_external_benc
 
 Notes:
 
-- Thinking in 360 downloads large official zip archives because the released image assets are packaged as zip files.
+- Thinking in 360 downloads official panorama zip archives, then recursively finds the bundled JSON/JSONL manifest inside the extracted package.
 - PanoEnv conversion relies on the `datasets` package because the official train split is loaded through the dataset loader rather than a plain JSONL file. If needed, install it with `pip install datasets pillow`.
-- The script always writes all three JSON files so your downstream training config can point to stable file names even when one source is intentionally skipped.
+- `PanoEnv` official train size is `415` panorama images and `10,340` QA pairs according to the dataset README. The default `open_ended` filter keeps a cleaner subset for SFT.
+- The script always writes stable output files, even when one source is intentionally skipped.
 - The exported format is the same multimodal training schema used elsewhere in this repo:
   - `id`
   - `messages`
