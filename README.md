@@ -225,3 +225,62 @@ Example output structure:
   }
 ]
 ```
+
+## External Benchmark Training Sets
+
+You can also collect three external 360-degree training corpora and export them in the same `multimodal_blocks` chat format:
+
+- `osr_bench_training_multimodal_blocks.json`
+- `thinking_in_360_training_multimodal_blocks.json`
+- `panoenv_training_multimodal_blocks.json`
+
+Run:
+
+```bash
+python3 /Users/wcp/code/erp_data_pipeline/data_merge/scripts/build_external_benchmark_sft.py \
+  --output-dir /workspace/data_dir/data_user/wcp/data_merge_outputs/external_benchmark_sft \
+  --cache-dir /workspace/data_dir/data_user/wcp/data_merge_outputs/external_benchmark_cache
+```
+
+The converter uses official sources only:
+
+- OSR-Bench: official `qa.csv` plus the benchmark images from [UUUserna/OSR-Bench](https://huggingface.co/datasets/UUUserna/OSR-Bench)
+- Thinking in 360: the official SFT releases [humanoid-vstar/hos-sft](https://huggingface.co/datasets/humanoid-vstar/hos-sft) and [humanoid-vstar/hps-sft](https://huggingface.co/datasets/humanoid-vstar/hps-sft)
+- PanoEnv: the official train split loaded through [7zkk/PanoEnv](https://huggingface.co/datasets/7zkk/PanoEnv) or [guangmulizi/PanoEnv](https://huggingface.co/datasets/guangmulizi/PanoEnv)
+
+Important training notes:
+
+- OSR-Bench can be converted into training data, but the public release does not expose a clean train split. If you train on all of it, your OSR-Bench evaluation is no longer clean.
+- Thinking in 360 should use the released SFT corpora for training. Do not train on HSTAR-Bench if you want a fair benchmark report.
+- PanoEnv should use only the official `train` split for training. Validation and test should remain untouched.
+
+The script writes a companion `external_benchmark_stats.json` file with these notes and per-file counts.
+
+Useful options:
+
+- `--max-osr-records N`
+- `--max-thinking-records N`
+- `--max-panoenv-records N`
+- `--skip-osr-bench`
+- `--skip-thinking-in-360`
+- `--skip-panoenv`
+
+Example smoke test:
+
+```bash
+python3 /Users/wcp/code/erp_data_pipeline/data_merge/scripts/build_external_benchmark_sft.py \
+  --output-dir /Users/wcp/code/erp_data_pipeline/data_merge/examples/external_benchmark_output \
+  --cache-dir /Users/wcp/code/erp_data_pipeline/data_merge/examples/external_benchmark_cache \
+  --max-osr-records 2 \
+  --skip-thinking-in-360 \
+  --skip-panoenv
+```
+
+Notes:
+
+- Thinking in 360 downloads large official zip archives because the released image assets are packaged as zip files.
+- PanoEnv conversion relies on the `datasets` package because the official train split is loaded through the dataset loader rather than a plain JSONL file. If needed, install it with `pip install datasets pillow`.
+- The exported format is the same multimodal training schema used elsewhere in this repo:
+  - `id`
+  - `messages`
+  - `images`
